@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"c:\\\\Users\\\\joshh\\\\PyCharmProject\\\\TripMate-AI\" log --oneline --all --graph -30)",
+      "Bash(git -C \"c:\\\\Users\\\\joshh\\\\PyCharmProject\\\\TripMate-AI\" branch -a)",
+      "Bash(git -C \"c:\\\\Users\\\\joshh\\\\PyCharmProject\\\\TripMate-AI\" show --stat --oneline HEAD)"
+    ]
+  }
+}
