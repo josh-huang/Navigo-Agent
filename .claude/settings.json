@@ -5,7 +5,9 @@
       "Bash(git -C \"c:\\\\Users\\\\joshh\\\\PyCharmProject\\\\TripMate-AI\" branch -a)",
       "Bash(git -C \"c:\\\\Users\\\\joshh\\\\PyCharmProject\\\\TripMate-AI\" show --stat --oneline HEAD)",
       "PowerShell(git commit -m \"Full-stack scaffold: FastAPI app, LangGraph backend, chat UI frontend\")",
-      "PowerShell(git commit -m \"Update README with architecture, setup, API docs, and project structure\")"
+      "PowerShell(git commit -m \"Update README with architecture, setup, API docs, and project structure\")",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import ast; ast.parse\\(open\\(r'backend.py', encoding='utf-8'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "PowerShell(git commit -m \"Refactor backend to ReAct agent pattern: LLM-driven tool selection replaces fixed pipeline\")"
     ]
   }
 }
