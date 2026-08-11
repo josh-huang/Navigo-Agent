@@ -135,6 +135,14 @@ def _eager_init_checkpointer() -> None:
             loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()),
         )
         logger.info("PostgreSQL checkpointer initialised (eager, import-time).")
+    except ValueError as error:
+        if "DATABASE_URL is missing" in str(error):
+            logger.warning(
+                "Skipping PostgreSQL checkpointer initialisation at import time "
+                "because DATABASE_URL is not set."
+            )
+            return
+        raise
     except Exception:
         logger.exception(
             "Failed to initialise PostgreSQL checkpointer at import time. "
@@ -148,7 +156,11 @@ _eager_init_checkpointer()
 
 def get_checkpointer() -> AsyncPostgresSaver:
     """Return the module-level checkpointer (already initialised)."""
-    assert _checkpointer is not None, "Checkpointer was not initialised — check startup logs."
+    if _checkpointer is None:
+        raise RuntimeError(
+            "Checkpointer was not initialised. Ensure DATABASE_URL is set and startup "
+            "checkpointer initialization succeeds."
+        )
     return _checkpointer
 
 

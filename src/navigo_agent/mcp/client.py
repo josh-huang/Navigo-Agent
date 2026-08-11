@@ -46,10 +46,22 @@ WEATHER_ENV["OPENWEATHER_API_KEY"] = OPENWEATHER_API_KEY or ""
 # LLM (for extract_destination helper)
 # ═══════════════════════════════════════════════════════════════════════
 
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
-    api_key=GROQ_API_KEY,
-)
+_llm = None
+
+
+def _get_llm():
+    global _llm
+    if _llm is not None:
+        return _llm
+
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY is missing. Add it to your .env file.")
+
+    _llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=GROQ_API_KEY,
+    )
+    return _llm
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -292,5 +304,5 @@ def extract_destination(query: str):
 
     Return only destination name.
     """
-    response = llm.invoke(prompt)
+    response = _get_llm().invoke(prompt)
     return response.content.strip()

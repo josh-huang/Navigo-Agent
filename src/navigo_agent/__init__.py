@@ -15,7 +15,6 @@ import uuid
 
 from langchain_core.messages import HumanMessage
 
-from navigo_agent.graph.builder import get_compiled_graph
 from navigo_agent.middleware import setup_middleware
 from navigo_agent.state import TravelState
 
@@ -48,6 +47,8 @@ async def run_travel_agent(user_input: str, thread_id: str | None = None) -> dic
     thread_id = f"user_{uuid.uuid4().hex}"
 
     config = {"configurable": {"thread_id": thread_id}}
+
+    from navigo_agent.graph.builder import get_compiled_graph
 
     graph = get_compiled_graph()
 
