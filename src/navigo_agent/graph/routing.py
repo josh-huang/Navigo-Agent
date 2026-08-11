@@ -8,8 +8,9 @@ import re
 import logging
 from langchain_core.messages import SystemMessage, HumanMessage
 
-from navigo_agent.config import get_llm
+from navigo_agent.config import get_llm, MAX_SUPERVISOR_LOOPS
 from navigo_agent.state import TravelState
+from navigo_agent.graph.supervisor import VALID_AGENT_NODES, _normalize_agent_name
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,21 @@ def route_after_intent(state: TravelState) -> str:
     return "supervisor"
 
 
+def _safe_next_agent(pending: list[str]) -> str | None:
+    """Return the first valid agent name from the pending list.
+
+    Normalizes LLM output variations first (e.g. "flight" -> "flight_agent"),
+    then validates against known graph nodes. Skips names that can't be resolved.
+    Returns None if no valid agent remains in the list.
+    """
+    for agent in pending:
+        normalized = _normalize_agent_name(agent)
+        if normalized in VALID_AGENT_NODES:
+            return normalized
+        logger.warning("Skipping invalid agent name '%s' — not a valid graph node.", agent)
+    return None
+
+
 def route_after_supervisor(state: TravelState) -> str:
     """Route based on supervisor's pending_agents list.
 
@@ -141,12 +157,12 @@ def route_after_supervisor(state: TravelState) -> str:
     """
     pending = state.get("pending_agents", [])
 
-    if pending:
-        next_agent = pending[0]
+    next_agent = _safe_next_agent(pending)
+    if next_agent:
         logger.info("Routing to next pending agent: %s", next_agent)
         return next_agent
 
-    # No pending agents — check if itinerary should run
+    # No valid pending agents — check if itinerary should run
     has_data = bool(state.get("flight_results") or state.get("hotel_results") or state.get("weather_results"))
     has_itinerary = bool(state.get("itinerary"))
     completed = state.get("completed_agents", [])
@@ -165,13 +181,9 @@ def route_after_agent(state: TravelState) -> str:
     """
     pending = state.get("pending_agents", [])
     loop_count = state.get("supervisor_loop_count", 0)
-    from navigo_agent.config import MAX_SUPERVISOR_LOOPS
 
-    # Move just-completed agent from pending to completed
-    # (the agent node itself handles this; here we just check remaining)
-
-    if pending:
-        next_agent = pending[0]
+    next_agent = _safe_next_agent(pending)
+    if next_agent:
         logger.info("Dispatching next pending agent: %s (remaining: %s)", next_agent, pending[1:])
         return next_agent
 

@@ -1,19 +1,14 @@
-"""MCP integration layer — re-exports from the root mcp_client module.
+"""MCP integration layer — convenience re-exports from client.py."""
 
-During Phase 2, the MCP client stays at the project root for backward compatibility
-while the navigo_agent package imports from it.
-
-Phase 3+: mcp_client.py can be moved into this directory.
-"""
-
-# Re-export all MCP convenience functions from the root module
-from mcp_client import (
+from navigo_agent.mcp.client import (
     tavily_mcp_search,
     aviation_mcp_call,
     weather_mcp_search,
     forecast_mcp_search,
     extract_destination,
+    extract_mcp_text,
     get_all_tools,
+    get_aviation_tools,
 )
 
 __all__ = [
@@ -22,5 +17,7 @@ __all__ = [
     "weather_mcp_search",
     "forecast_mcp_search",
     "extract_destination",
+    "extract_mcp_text",
     "get_all_tools",
+    "get_aviation_tools",
 ]

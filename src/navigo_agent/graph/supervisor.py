@@ -14,6 +14,66 @@ from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
 
+# ── Agent Name Normalization ──────────────────────────────────────────
+# LLMs often output "flight" instead of "flight_agent", etc.
+# This mapping prevents routing failures when the supervisor uses
+# a short/alias name rather than the exact graph node key.
+
+AGENT_NAME_ALIASES: dict[str, str] = {
+    "flight": "flight_agent",
+    "flight agent": "flight_agent",
+    "flightagent": "flight_agent",
+    "hotel": "hotel_agent",
+    "hotel agent": "hotel_agent",
+    "hotelagent": "hotel_agent",
+    "weather": "weather_agent",
+    "weather agent": "weather_agent",
+    "weatheragent": "weather_agent",
+    "itinerary": "itinerary_agent",
+    "itinerary agent": "itinerary_agent",
+    "itineraryagent": "itinerary_agent",
+    "final": "final_synthesizer",
+    "final_synthesizer": "final_synthesizer",
+    "final synthesizer": "final_synthesizer",
+    "finalsynthesizer": "final_synthesizer",
+}
+
+VALID_AGENT_NODES = frozenset({
+    "flight_agent",
+    "hotel_agent",
+    "weather_agent",
+    "itinerary_agent",
+    "final_synthesizer",
+})
+
+
+def _normalize_agent_name(raw: str) -> str:
+    """Map a raw agent name from the LLM to a valid graph node key.
+
+    Handles common LLM output variations (case, spaces, suffixes).
+    Falls back to exact match if the name is already valid.
+    """
+    cleaned = raw.strip().lower().replace("_", " ").replace("-", " ")
+    # Collapse multiple spaces
+    cleaned = " ".join(cleaned.split())
+
+    # Direct alias lookup
+    if cleaned in AGENT_NAME_ALIASES:
+        return AGENT_NAME_ALIASES[cleaned]
+
+    # Fuzzy: try appending "_agent"
+    suffix_try = f"{cleaned.replace(' ', '_')}"
+    if suffix_try in VALID_AGENT_NODES:
+        return suffix_try
+
+    # Already valid (with underscores)
+    if raw.strip() in VALID_AGENT_NODES:
+        return raw.strip()
+
+    # Unknown — log and return as-is (caller should handle)
+    logger.warning("Unrecognized agent name '%s' — passing through.", raw)
+    return raw.strip()
+
 
 # ── Routing Decision Schema ──────────────────────────────────────────
 
@@ -42,10 +102,10 @@ SUPERVISOR_SYSTEM_PROMPT = """You are the Supervisor Agent of a multi-agent trav
 Your job: analyze the user's request and the current state of information gathering, then decide which specialized agents to dispatch next.
 
 Available agents:
-- flight_agent: searches flights, airports, airlines via AviationStack API
-- hotel_agent: searches hotels via Tavily web search
+- flight_agent: searches flights via Tavily web search (ReAct multi-hop)
+- hotel_agent: searches hotels via Tavily web search (ReAct multi-hop)
 - weather_agent: fetches current weather + 5-day forecast via OpenWeatherMap
-- itinerary_agent: generates a day-by-day itinerary from collected data
+- itinerary_agent: generates a day-by-day itinerary from collected data (ReAct multi-hop)
 - final_synthesizer: formats everything into a polished travel plan
 
 Decision rules:
@@ -58,12 +118,14 @@ Decision rules:
 7. If an agent failed (check errors), skip it or retry once. Don't dispatch the same agent twice.
 
 Output a JSON object with exactly these fields:
-{{
+{
     "reasoning": "<one sentence explaining your decision>",
     "next_action": "<action from the list above>",
     "agents_to_dispatch": ["<agent_name>", ...] or [],
     "is_complete": true/false
-}}
+}
+
+IMPORTANT: Use the EXACT agent names: "flight_agent", "hotel_agent", "weather_agent", "itinerary_agent", "final_synthesizer".
 
 Output ONLY the JSON. No markdown, no explanation outside the JSON.
 """
@@ -125,6 +187,12 @@ def _parse_supervisor_output(raw: str) -> SupervisorDecision:
 
     try:
         data = json.loads(text)
+        # Normalize agent names from the LLM (e.g. "flight" → "flight_agent")
+        raw_agents = data.get("agents_to_dispatch", [])
+        if isinstance(raw_agents, list):
+            data["agents_to_dispatch"] = [
+                _normalize_agent_name(a) for a in raw_agents
+            ]
         return SupervisorDecision(**data)
     except (json.JSONDecodeError, Exception) as e:
         logger.warning("Failed to parse supervisor output: %s. Raw: %.200s", e, raw)

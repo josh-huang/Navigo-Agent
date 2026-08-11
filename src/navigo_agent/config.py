@@ -23,6 +23,18 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 AVIATIONSTACK_API_KEY = os.getenv("AVIATIONSTACK_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 
+# ── LangSmith Tracing (optional but recommended) ──────────────────────
+# Set LANGCHAIN_TRACING_V2=true and LANGCHAIN_API_KEY=... in .env to enable.
+# Leave unset to skip tracing (no-op for local dev).
+LANGCHAIN_TRACING_V2 = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
+LANGCHAIN_API_KEY = os.getenv("LANGCHAIN_API_KEY")
+LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "navigo-agent")
+
+if LANGCHAIN_TRACING_V2 and LANGCHAIN_API_KEY:
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_API_KEY"] = LANGCHAIN_API_KEY
+    os.environ["LANGCHAIN_PROJECT"] = LANGCHAIN_PROJECT
+
 # ── Constants ─────────────────────────────────────────────────────────
 MAX_SUPERVISOR_LOOPS = 3
 MAX_INPUT_LENGTH = 1000

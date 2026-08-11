@@ -1,0 +1,19 @@
+# Intent classifier prompts — v1.0
+# Variable placeholders: {query}
+
+llm_classify:
+  version: "1.0"
+  template: |
+    Classify this travel-related query into exactly one category.
+
+    Categories:
+    - flight: only asking about flights, airlines, airports
+    - hotel: only asking about hotels, accommodations, places to stay
+    - weather: only asking about weather, temperature, climate
+    - itinerary: asking for a day-by-day plan based on already-known information
+    - full_trip: asking for a complete trip plan including flights, hotels, and activities
+    - general: none of the above, but still travel-related
+
+    Query: "{query}"
+
+    Respond with ONLY the category name (one word). No explanation.

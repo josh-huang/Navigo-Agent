@@ -35,10 +35,6 @@ COPY --from=builder /app/src /app/src
 COPY --from=builder /app/templates /app/templates
 COPY --from=builder /app/static /app/static
 COPY --from=builder /app/app.py /app/app.py
-COPY --from=builder /app/backend.py /app/backend.py
-COPY --from=builder /app/mcp_client.py /app/mcp_client.py
-COPY --from=builder /app/custom_weather_mcp_server.py /app/custom_weather_mcp_server.py
-COPY --from=builder /app/tools /app/tools
 
 ENV PATH="/app/.venv/bin:$PATH"
 

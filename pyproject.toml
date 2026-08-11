@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 packages = ["src/navigo_agent"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/navigo_agent/**", "app.py", "backend.py", "templates/**", "static/**"]
+include = ["src/navigo_agent/**", "app.py", "templates/**", "static/**"]
 
 [project]
 name = "navigo-agent"
@@ -39,6 +39,7 @@ dependencies = [
     "starlette<1.6.0",
     "bleach>=6.4.0",
     "slowapi>=0.1.10",
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]

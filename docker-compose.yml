@@ -1,19 +1,38 @@
+# Navigo-Agent local development stack
+#   docker compose up --build
+#
+# Services:
+#   app      — FastAPI + LangGraph (port 8000)
+#   postgres — PostgreSQL 16 for LangGraph checkpointing + user preferences
+
+version: "3.9"
+
 services:
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: navigo-app
     ports:
       - "8000:8000"
     env_file:
       - .env
     environment:
-      - DATABASE_URL=postgresql://navigo:navigo@db:5432/navigo
+      - DATABASE_URL=postgresql://navigo:navigo@postgres:5432/navigo
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
-  db:
+  postgres:
     image: postgres:16-alpine
+    container_name: navigo-postgres
     environment:
       POSTGRES_USER: navigo
       POSTGRES_PASSWORD: navigo
@@ -22,12 +41,12 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U navigo"]
+      test: ["CMD-SHELL", "pg_isready -U navigo -d navigo"]
       interval: 5s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
 
 volumes:
   pgdata:

@@ -1,11 +1,7 @@
-"""Composable input guard pipeline.
+"""Input guard: sanitise and validate user input before graph invocation.
 
-Checks applied in order:
-  1. Length limit (max 1000 chars)
-  2. Control character stripping
-  3. Prompt injection detection
-  4. PII detection (flag only, don't block)
-  5. Topic boundary check
+Composable check pipeline — each check returns whether the input is safe.
+Checks are lightweight (regex + keyword heuristics), no LLM calls.
 """
 
 import re
@@ -14,164 +10,145 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 MAX_INPUT_LENGTH = 1000
 
-# Unicode control / bidi-override characters used in prompt smuggling
-CONTROL_CHARS = re.compile(
-    r"[\x00-\x08\x0b\x0c\x0e-\x1f"
-    r"​-‏"  # zero-width space, joiners, bidi marks
-    r"‪-‮"  # bidi overrides
-    r"⁠-⁩"  # word joiner, bidi isolates
-    r"﻿￰-￿]"
-)
-
-# Prompt injection detection patterns
-PROMPT_INJECTION_PATTERNS: list[re.Pattern] = [
-    re.compile(r"ignore\s+(all\s+)?(previous|prior|above|the\s+above)\s+(instructions?|prompts?|messages?|context)", re.I),
-    re.compile(r"disregard\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)", re.I),
-    re.compile(r"forget\s+(everything|all|your)\s+(you\s+)?(were\s+told|instructions?)", re.I),
-    re.compile(r"(you\s+are|act\s+as|pretend\s+you\s+are|now\s+you\s+are)\s+(now\s+)?(DAN|STAN|a\s+different|a\s+new)\b", re.I),
-    re.compile(r"(system\s*(prompt|message|instruction|:))", re.I),
-    re.compile(r"\[system\]|\[/system\]|<\|system\|>|</?system>", re.I),
-    re.compile(r"\bSYSTEM\s*:\s*(override|bypass|ignore|reset)", re.I),
-    re.compile(r"from\s+now\s+on\s+(you|your)\s+(are|will|must)\s+(no\s+longer|not)", re.I),
-    re.compile(r"(do|does)\s+not\s+(follow|obey|comply)", re.I),
-    re.compile(r"override\s+(system|safety|content\s+policy)", re.I),
-    re.compile(r"jailbreak|jail\s*break", re.I),
-    re.compile(r"<!--|-->|<\s*script|javascript\s*:", re.I),
-]
-
-# PII detection patterns (flag only, don't block)
-PII_PATTERNS: dict[str, re.Pattern] = {
-    "email": re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"),
-    "phone": re.compile(r"(\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}"),
-    "credit_card": re.compile(r"\b(?:\d[ -]*?){13,16}\b"),
-    "ssn": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
-}
-
-# Off-topic blocklist (keyword-scored)
-OFF_TOPIC_KEYWORDS: list[str] = [
-    "write me a virus", "write a virus", "virus that steals", "create malware", "hack into", "ddos attack",
-    "child abuse", "illegal weapon", "how to make drugs",
-    "commit suicide", "self-harm instructions",
-    "generate explicit", "create deepfake porn",
-    "write me code for a keylogger", "phishing email template",
-]
-
-# ---------------------------------------------------------------------------
-# Data types
-# ---------------------------------------------------------------------------
-
+# ── Guard Result ───────────────────────────────────────────────────────
 
 @dataclass
 class GuardResult:
-    """Result of an input guard check."""
-
+    """Result of input guard checks."""
     passed: bool
     blocked_reason: str | None = None
-    sanitized_input: str | None = None
+    sanitized_input: str = ""
     pii_detected: list[str] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Individual checks
-# ---------------------------------------------------------------------------
+# ── Check 1: Length ────────────────────────────────────────────────────
+
+def _check_length(user_input: str) -> str | None:
+    """Reject inputs over MAX_INPUT_LENGTH — prevents context-window DoS."""
+    if len(user_input) > MAX_INPUT_LENGTH:
+        return f"Input too long ({len(user_input)} chars, max {MAX_INPUT_LENGTH})."
+    return None
 
 
-def _check_length(text: str) -> GuardResult:
-    if len(text) > MAX_INPUT_LENGTH:
-        return GuardResult(
-            passed=False,
-            blocked_reason=f"Input exceeds maximum length of {MAX_INPUT_LENGTH} characters (got {len(text)}).",
-        )
-    return GuardResult(passed=True, sanitized_input=text)
+# ── Check 2: Control Characters ────────────────────────────────────────
+
+# Null bytes, Unicode bidi-override / direction-control characters
+CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f‎‏‪-‮⁦-⁩]")
+
+def _sanitize_control_chars(user_input: str) -> str:
+    """Strip null bytes and Unicode direction-control characters."""
+    return CONTROL_CHAR_PATTERN.sub("", user_input)
 
 
-def _strip_control_chars(text: str) -> GuardResult:
-    cleaned = CONTROL_CHARS.sub("", text)
-    removed_count = len(text) - len(cleaned)
-    if removed_count > 0:
-        logger.info("Stripped %d control characters from input.", removed_count)
-    return GuardResult(passed=True, sanitized_input=cleaned)
+# ── Check 3: Prompt Injection Detection ────────────────────────────────
+
+# Known jailbreak / prompt-injection patterns — lightweight regex + keyword
+INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
+    # Direct override attempts
+    ("system_override", re.compile(
+        r"(ignore|forget|disregard)\s+(all\s+)?(previous|prior|above|earlier)\s+(instructions?|prompts?|rules?|context)",
+        re.I,
+    )),
+    ("role_override", re.compile(
+        r"(you\s+are\s+now|act\s+as\s+(a|an)|pretend\s+you\s+are|you\s+must\s+(obey|follow))",
+        re.I,
+    )),
+    ("dan_jailbreak", re.compile(
+        r"\bDAN\b.*\b(do\s+anything\s+now|jailbreak)\b", re.I,
+    )),
+    ("delimiter_attack", re.compile(
+        r"<\/?system>|<\/?instruction>|\[system\]|\[/system\]|<\|im_start\|>|<\|im_end\|>",
+        re.I,
+    )),
+    ("prompt_leak", re.compile(
+        r"(reveal|show|print|display|tell\s+me)\s+(your\s+)?(system\s+)?(prompt|instructions?|rules?)",
+        re.I,
+    )),
+    ("output_format_hijack", re.compile(
+        r"(respond\s+only\s+with|output\s+in\s+JSON|format\s+your\s+response)",
+        re.I,
+    )),
+]
+
+def _detect_injection(user_input: str) -> str | None:
+    """Scan for known prompt-injection patterns. Returns reason or None."""
+    for name, pattern in INJECTION_PATTERNS:
+        if pattern.search(user_input):
+            logger.warning("Input guard: detected injection pattern '%s' in: %.100s", name, user_input)
+            return f"Input blocked: potential prompt injection detected ({name})."
+    return None
 
 
-def _check_prompt_injection(text: str) -> GuardResult:
-    matched = []
-    for pattern in PROMPT_INJECTION_PATTERNS:
-        if match := pattern.search(text):
-            matched.append(f"{pattern.pattern[:60]}... → matched: '{match.group()}'")
+# ── Check 4: PII Detection ─────────────────────────────────────────────
 
-    if matched:
-        logger.warning("Prompt injection patterns detected: %s", matched)
-        return GuardResult(
-            passed=False,
-            blocked_reason="Input contains patterns consistent with prompt injection. Your request has been blocked.",
-        )
-    return GuardResult(passed=True, sanitized_input=text)
+PII_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("email", re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")),
+    ("phone", re.compile(r"(\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}")),
+    ("credit_card", re.compile(r"\b(?:\d[ -]*?){13,16}\b")),
+]
 
-
-def _check_pii(text: str) -> GuardResult:
-    detected = []
-    for pii_type, pattern in PII_PATTERNS.items():
-        if pattern.search(text):
-            detected.append(pii_type)
-
-    if detected:
-        logger.info("PII patterns detected in input: %s", detected)
-        return GuardResult(passed=True, sanitized_input=text, pii_detected=detected)
-    return GuardResult(passed=True, sanitized_input=text)
+def _detect_pii(user_input: str) -> list[str]:
+    """Detect PII in input — log-only, does NOT block."""
+    found: list[str] = []
+    for name, pattern in PII_PATTERNS:
+        if pattern.search(user_input):
+            found.append(name)
+    if found:
+        logger.info("Input guard: PII detected (%s) — not blocked, logged for audit.", ", ".join(found))
+    return found
 
 
-def _check_topic(text: str) -> GuardResult:
-    text_lower = text.lower()
-    for keyword in OFF_TOPIC_KEYWORDS:
-        if keyword in text_lower:
-            logger.warning("Off-topic content detected: '%s' matched keyword '%s'.", text[:100], keyword)
-            return GuardResult(
-                passed=False,
-                blocked_reason="Your request appears to be outside the scope of a travel planning assistant.",
-            )
-    return GuardResult(passed=True, sanitized_input=text)
+# ── Check 5: Topic Boundary ────────────────────────────────────────────
+
+# Lightweight keyword heuristic — reject clearly off-topic requests
+OFF_TOPIC_KEYWORDS: list[tuple[str, re.Pattern]] = [
+    ("malware", re.compile(r"\b(write|create|generate)\s+(a\s+)?(virus|malware|ransomware|trojan|worm|exploit)\b", re.I)),
+    ("hacking", re.compile(r"\b(hack\s+(into|the)|crack\s+(a\s+)?password|ddos\s+attack)\b", re.I)),
+    ("illegal_content", re.compile(r"\b(child\s+(porn|abuse)|snuff\s+film|how\s+to\s+(make|manufacture)\s+(drugs?|bombs?))\b", re.I)),
+    ("self_harm", re.compile(r"\b(how\s+to\s+(commit\s+)?suicide|ways\s+to\s+(kill|harm)\s+(myself|yourself))\b", re.I)),
+]
+
+def _check_topic_boundary(user_input: str) -> str | None:
+    """Block clearly off-topic or harmful requests."""
+    for name, pattern in OFF_TOPIC_KEYWORDS:
+        if pattern.search(user_input):
+            logger.warning("Input guard: off-topic request blocked (%s).", name)
+            return f"Input blocked: your request appears to be outside the scope of this travel assistant."
+    return None
 
 
-# ---------------------------------------------------------------------------
-# Pipeline runner
-# ---------------------------------------------------------------------------
+# ── Main Guard Pipeline ────────────────────────────────────────────────
 
+def guard_input(user_input: str) -> GuardResult:
+    """Run the full input guard pipeline.
 
-def validate_input(user_message: str) -> GuardResult:
-    """Run the full input validation pipeline.
+    Order: length → control chars → injection → pii → topic.
 
-    Returns GuardResult with:
-      - passed: True if input is safe to process
-      - blocked_reason: why the input was blocked (if passed=False)
-      - sanitized_input: cleaned version of the input (if passed=True)
-      - pii_detected: list of PII types found (for logging, never blocks)
+    Returns GuardResult with sanitized input (always) + pass/fail flag.
     """
-    checks = [
-        _check_length,
-        _strip_control_chars,
-        _check_prompt_injection,
-        _check_pii,
-        _check_topic,
-    ]
+    # 1. Length
+    length_error = _check_length(user_input)
+    if length_error:
+        return GuardResult(passed=False, blocked_reason=length_error)
 
-    current_text = user_message.strip()
-    all_pii: list[str] = []
+    # 2. Sanitize control characters
+    sanitized = _sanitize_control_chars(user_input).strip()
+    if not sanitized:
+        return GuardResult(passed=False, blocked_reason="Input is empty after sanitisation.")
 
-    for check in checks:
-        result = check(current_text)
-        if not result.passed:
-            result.sanitized_input = None
-            result.pii_detected = all_pii
-            return result
-        if result.pii_detected:
-            all_pii.extend(result.pii_detected)
-        if result.sanitized_input is not None:
-            current_text = result.sanitized_input
+    # 3. Prompt injection
+    injection_error = _detect_injection(sanitized)
+    if injection_error:
+        return GuardResult(passed=False, blocked_reason=injection_error)
 
-    return GuardResult(passed=True, sanitized_input=current_text, pii_detected=all_pii)
+    # 4. PII (log-only, never blocks)
+    pii_found = _detect_pii(sanitized)
+
+    # 5. Topic boundary
+    topic_error = _check_topic_boundary(sanitized)
+    if topic_error:
+        return GuardResult(passed=False, blocked_reason=topic_error)
+
+    return GuardResult(passed=True, sanitized_input=sanitized, pii_detected=pii_found)

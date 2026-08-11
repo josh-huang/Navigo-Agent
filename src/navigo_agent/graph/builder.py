@@ -98,16 +98,20 @@ def build_travel_graph() -> StateGraph:
 
 
 # ── Checkpointer Initialization ──────────────────────────────────────
+#
+# IMPORTANT: asyncio.run() MUST happen at module import time, NOT lazily
+# on the first request.  When lazy-init fires inside a FastAPI handler,
+# Uvicorn's event loop is already running and Python ≥3.10 raises:
+#   RuntimeError: asyncio.run() cannot be called from a running event loop
+#
+# Module-level init runs during `app.py` import (before Uvicorn starts)
+# so there is no event loop conflict.
 
 _checkpointer: AsyncPostgresSaver | None = None
 
 
 async def _init_checkpointer():
-    """Create async Postgres connection and checkpointer.
-
-    Called once at module level via asyncio.run() — runs outside
-    any request handler so it won't conflict with Uvicorn's event loop.
-    """
+    """Create async Postgres connection and checkpointer."""
     dsn = get_checkpointer_dsn()
     async_conn = await psycopg.AsyncConnection.connect(
         dsn,
@@ -119,14 +123,32 @@ async def _init_checkpointer():
     return cp
 
 
-def get_checkpointer() -> AsyncPostgresSaver:
-    """Return the module-level checkpointer, initializing it if needed."""
+def _eager_init_checkpointer() -> None:
+    """Initialise the module-level checkpointer synchronously.
+
+    Called at import time — before any event loop exists.
+    """
     global _checkpointer
-    if _checkpointer is None:
+    try:
         _checkpointer = asyncio.run(
             _init_checkpointer(),
             loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()),
         )
+        logger.info("PostgreSQL checkpointer initialised (eager, import-time).")
+    except Exception:
+        logger.exception(
+            "Failed to initialise PostgreSQL checkpointer at import time. "
+            "Check DATABASE_URL in .env and network connectivity."
+        )
+        raise  # fail fast — app cannot serve requests without persistence
+
+
+_eager_init_checkpointer()
+
+
+def get_checkpointer() -> AsyncPostgresSaver:
+    """Return the module-level checkpointer (already initialised)."""
+    assert _checkpointer is not None, "Checkpointer was not initialised — check startup logs."
     return _checkpointer
 
 

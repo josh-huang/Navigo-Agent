@@ -54,7 +54,15 @@
       "Bash(uv add *)",
       "Bash(PYTHONPATH=src uv run python -c ' *)",
       "Bash(uv pip *)",
-      "Bash(uv run python -c ' *)"
+      "Bash(uv run python -c ' *)",
+      "Bash(git commit -m 'feat: v0.2.0 — Supervisor agent, guardrails, memory, CI/CD *)",
+      "Bash(git remote *)",
+      "Bash(git fetch *)",
+      "Bash(git commit --amend -m '@ *)",
+      "Bash(git commit --amend -m 'feat: v0.2.0 — Supervisor agent, guardrails, memory, CI/CD *)",
+      "Bash(python -c \"with open\\('src/navigo_agent/graph/agents/flight.py', 'r'\\) as f: lines = f.readlines\\(\\); print\\(repr\\(lines[99]\\)\\)\")",
+      "Bash(python -c \"from navigo_agent.graph.agents.flight import flight_agent; print\\('Import OK'\\)\")",
+      "Bash(Select-Object -First 50)"
     ]
   }
 }
