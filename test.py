@@ -1,7 +1,5 @@
-from backend import run_travel_agent
+import asyncio
+from mcp_client import get_all_tools
 
-user_input = input("Enter your travel request: ")
-
-response = run_travel_agent(user_input, 'test_thread_id')
-
-print(response["answer"])
+if __name__ == "__main__":
+    asyncio.run(get_all_tools())
