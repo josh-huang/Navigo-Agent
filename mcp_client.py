@@ -68,9 +68,9 @@ client = MultiServerMCPClient(
 
         "aviationstack": {
             "transport": "stdio",
-            "command": "uvx",
+            "command": sys.executable,
             "args": [
-                "aviationstack-mcp"
+                "-m", "aviationstack_mcp"
             ],
             "env": AVIATION_ENV
         },

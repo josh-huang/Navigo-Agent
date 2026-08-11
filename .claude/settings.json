@@ -7,7 +7,24 @@
       "PowerShell(git commit -m \"Full-stack scaffold: FastAPI app, LangGraph backend, chat UI frontend\")",
       "PowerShell(git commit -m \"Update README with architecture, setup, API docs, and project structure\")",
       "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import ast; ast.parse\\(open\\(r'backend.py', encoding='utf-8'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
-      "PowerShell(git commit -m \"Refactor backend to ReAct agent pattern: LLM-driven tool selection replaces fixed pipeline\")"
+      "PowerShell(git commit -m \"Refactor backend to ReAct agent pattern: LLM-driven tool selection replaces fixed pipeline\")",
+      "Bash(git checkout *)",
+      "Bash(git commit *)",
+      "Bash(.venv/Scripts/pip freeze *)",
+      "Bash(xargs .venv/Scripts/pip uninstall -y)",
+      "Bash(.venv/Scripts/pip list *)",
+      "Bash(.venv/Scripts/pip install *)",
+      "Bash(npx --version)",
+      "Bash(uv --version)",
+      "PowerShell(powershell -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\")",
+      "Bash(.venv/Scripts/python --version)",
+      "Bash(npm search *)",
+      "Bash(npm info *)",
+      "Bash(npm view *)",
+      "Bash(uv run *)",
+      "PowerShell(uv run python test.py)",
+      "PowerShell($paths = @\\(\"$env:USERPROFILE\\\\.cargo\\\\bin\\\\uv.exe\", \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\", \"$env:LOCALAPPDATA\\\\Programs\\\\uv\\\\uv.exe\"\\); foreach \\($p in $paths\\) { if \\(Test-Path $p\\) { Write-Output $p; break } })",
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run python test.py 2>&1)"
     ]
   }
 }
