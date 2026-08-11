@@ -1,8 +1,9 @@
 """FastAPI integration tests for Navigo-Agent."""
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, AsyncMock, MagicMock
 
 # We import the app after mocking the heavy dependencies
 # to avoid triggering PostgreSQL connections at import time

@@ -11,28 +11,28 @@ Architecture:
       supervisor (loop back, max 3 rounds)
 """
 
-import logging
 import asyncio
+import logging
 import selectors
-import psycopg
-from psycopg.rows import dict_row
-from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from navigo_agent.state import TravelState
+import psycopg
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.graph import END, START, StateGraph
+from psycopg.rows import dict_row
+
 from navigo_agent.config import get_checkpointer_dsn
-from navigo_agent.graph.supervisor import supervisor_node
-from navigo_agent.graph.routing import (
-    intent_classifier,
-    route_after_intent,
-    route_after_supervisor,
-    route_after_agent,
-)
+from navigo_agent.graph.agents.final import final_synthesizer
 from navigo_agent.graph.agents.flight import flight_agent
 from navigo_agent.graph.agents.hotel import hotel_agent
-from navigo_agent.graph.agents.weather import weather_agent
 from navigo_agent.graph.agents.itinerary import itinerary_agent
-from navigo_agent.graph.agents.final import final_synthesizer
+from navigo_agent.graph.agents.weather import weather_agent
+from navigo_agent.graph.routing import (
+    intent_classifier,
+    route_after_agent,
+    route_after_supervisor,
+)
+from navigo_agent.graph.supervisor import supervisor_node
+from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +135,14 @@ def _eager_init_checkpointer() -> None:
             loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()),
         )
         logger.info("PostgreSQL checkpointer initialised (eager, import-time).")
+    except ValueError as error:
+        if "DATABASE_URL is missing" in str(error):
+            logger.warning(
+                "Skipping PostgreSQL checkpointer initialisation at import time "
+                "because DATABASE_URL is not set."
+            )
+            return
+        raise
     except Exception:
         logger.exception(
             "Failed to initialise PostgreSQL checkpointer at import time. "
@@ -148,7 +156,11 @@ _eager_init_checkpointer()
 
 def get_checkpointer() -> AsyncPostgresSaver:
     """Return the module-level checkpointer (already initialised)."""
-    assert _checkpointer is not None, "Checkpointer was not initialised — check startup logs."
+    if _checkpointer is None:
+        raise RuntimeError(
+            "Checkpointer was not initialised. Ensure DATABASE_URL is set and startup "
+            "checkpointer initialization succeeds."
+        )
     return _checkpointer
 
 

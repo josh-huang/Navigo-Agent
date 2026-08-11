@@ -7,8 +7,9 @@ Extended from the original linear pipeline to support:
   - Error accumulation (graceful degradation)
 """
 
-from typing import TypedDict, Annotated, Any
 import operator
+from typing import Annotated, TypedDict
+
 from langchain_core.messages import AnyMessage
 
 

@@ -4,18 +4,15 @@ Loads environment variables and provides LLM factory + constants.
 """
 
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # ── Required API Keys ─────────────────────────────────────────────────
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY is missing. Add it to your .env file.")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL is missing. Add your Render PostgreSQL URL to .env.")
 
 # ── Optional Settings ─────────────────────────────────────────────────
 DEFAULT_ORIGIN_IATA = os.getenv("DEFAULT_ORIGIN_IATA", "DAC")
@@ -61,6 +58,9 @@ def get_llm(
     """
     from langchain_groq import ChatGroq
 
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY is missing. Add it to your .env file.")
+
     return ChatGroq(
         model=LLM_MODEL,
         api_key=GROQ_API_KEY,
@@ -73,6 +73,9 @@ def get_llm(
 
 def get_checkpointer_dsn() -> str:
     """Return the PostgreSQL connection string with sslmode=require enforced."""
+    if not DATABASE_URL:
+        raise ValueError("DATABASE_URL is missing. Add your Render PostgreSQL URL to .env.")
+
     dsn = DATABASE_URL
     if "sslmode=" not in dsn:
         separator = "&" if "?" in dsn else "?"

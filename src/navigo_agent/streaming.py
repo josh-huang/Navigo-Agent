@@ -15,9 +15,9 @@ Usage (in FastAPI route):
 """
 
 import json
-import uuid
 import logging
-from typing import AsyncGenerator
+import uuid
+from collections.abc import AsyncGenerator
 
 from langchain_core.messages import HumanMessage
 
@@ -55,7 +55,7 @@ def _sse_event(event: str, data: dict) -> str:
 async def stream_travel_plan(
     user_input: str,
     thread_id: str | None = None,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """Stream the travel planning graph execution as SSE events.
 
     Events emitted:
@@ -101,34 +101,33 @@ async def stream_travel_plan(
             name = event.get("name", "")
 
             # Node completion events
-            if kind == "on_chain_end" and name in AGENT_DISPLAY_NAMES:
-                if name not in completed_nodes:
-                    completed_nodes.add(name)
-                    display_name = AGENT_DISPLAY_NAMES[name]
-                    icon = AGENT_ICONS.get(name, "⏳")
+            if kind == "on_chain_end" and name in AGENT_DISPLAY_NAMES and name not in completed_nodes:
+                completed_nodes.add(name)
+                display_name = AGENT_DISPLAY_NAMES[name]
+                icon = AGENT_ICONS.get(name, "⏳")
 
-                    yield _sse_event("progress", {
-                        "agent": name,
-                        "display": display_name,
-                        "icon": icon,
-                        "status": "completed",
-                    })
+                yield _sse_event("progress", {
+                    "agent": name,
+                    "display": display_name,
+                    "icon": icon,
+                    "status": "completed",
+                })
 
-                    # Extract agent-specific results from the output
-                    output = event.get("data", {}).get("output", {})
-                    if isinstance(output, dict):
-                        result_data = {}
-                        if name == "flight_agent" and output.get("flight_results"):
-                            result_data["flight_results"] = output["flight_results"][:500]
-                        elif name == "hotel_agent" and output.get("hotel_results"):
-                            result_data["hotel_results"] = output["hotel_results"][:500]
-                        elif name == "weather_agent" and output.get("weather_results"):
-                            result_data["weather_results"] = output["weather_results"][:500]
-                        elif name == "itinerary_agent" and output.get("itinerary"):
-                            result_data["itinerary"] = output["itinerary"][:500]
+                # Extract agent-specific results from the output
+                output = event.get("data", {}).get("output", {})
+                if isinstance(output, dict):
+                    result_data = {}
+                    if name == "flight_agent" and output.get("flight_results"):
+                        result_data["flight_results"] = output["flight_results"][:500]
+                    elif name == "hotel_agent" and output.get("hotel_results"):
+                        result_data["hotel_results"] = output["hotel_results"][:500]
+                    elif name == "weather_agent" and output.get("weather_results"):
+                        result_data["weather_results"] = output["weather_results"][:500]
+                    elif name == "itinerary_agent" and output.get("itinerary"):
+                        result_data["itinerary"] = output["itinerary"][:500]
 
-                        if result_data:
-                            yield _sse_event("agent_result", result_data)
+                    if result_data:
+                        yield _sse_event("agent_result", result_data)
 
             # Final graph completion
             if kind == "on_chain_end" and name == "LangGraph":
@@ -153,7 +152,7 @@ async def stream_travel_plan(
                         "llm_calls": output.get("llm_calls", 0),
                     })
 
-    except Exception as e:
+    except Exception:
         logger.exception("Streaming graph execution failed for thread %s", thread_id)
         yield _sse_event("error", {
             "message": "An error occurred while generating your travel plan. Please try again.",

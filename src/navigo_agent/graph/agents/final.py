@@ -1,7 +1,8 @@
 """Final synthesizer: formats all collected data into a polished travel plan."""
 
 import logging
-from langchain_core.messages import SystemMessage, HumanMessage
+
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from navigo_agent.config import get_llm
 from navigo_agent.state import TravelState
@@ -44,7 +45,7 @@ Important:
             SystemMessage(content="You are a professional travel assistant that creates a final travel plan based on user queries and search results."),
             HumanMessage(content=final_prompt),
         ])
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Final synthesizer failed: %s", e)
         return {
             "messages": [
@@ -54,7 +55,7 @@ Important:
                 )
             ],
             "llm_calls": state.get("llm_calls", 0),
-            "errors": [f"final_synthesizer: {str(e)}"],
+            "errors": [f"final_synthesizer: {e!s}"],
         }
 
     return {

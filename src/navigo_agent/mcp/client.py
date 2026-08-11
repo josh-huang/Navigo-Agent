@@ -12,9 +12,8 @@ from pathlib import Path
 
 import certifi
 from dotenv import load_dotenv
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_groq import ChatGroq
-
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 # ═══════════════════════════════════════════════════════════════════════
 # Environment configuration
@@ -47,10 +46,22 @@ WEATHER_ENV["OPENWEATHER_API_KEY"] = OPENWEATHER_API_KEY or ""
 # LLM (for extract_destination helper)
 # ═══════════════════════════════════════════════════════════════════════
 
-llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
-    api_key=GROQ_API_KEY,
-)
+_llm = None
+
+
+def _get_llm():
+    global _llm
+    if _llm is not None:
+        return _llm
+
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY is missing. Add it to your .env file.")
+
+    _llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        api_key=GROQ_API_KEY,
+    )
+    return _llm
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -105,7 +116,7 @@ async def get_all_tools():
             print(f"\nAvailable tools from {server_name} MCP:\n")
             for tool in tools:
                 print(tool.name)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             print(f"\nCould not connect to {server_name} MCP:\n{error}\n")
 
     return all_tools
@@ -170,7 +181,7 @@ async def initialize_aviation_tools():
         )
 
 
-async def aviation_mcp_call(tool_name: str, tool_args: dict = None):
+async def aviation_mcp_call(tool_name: str, tool_args: dict | None = None):
     await initialize_aviation_tools()
 
     tool = aviation_tools.get(tool_name)
@@ -293,5 +304,5 @@ def extract_destination(query: str):
 
     Return only destination name.
     """
-    response = llm.invoke(prompt)
+    response = _get_llm().invoke(prompt)
     return response.content.strip()

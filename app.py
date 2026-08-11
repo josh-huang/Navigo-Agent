@@ -7,10 +7,10 @@ Routes:
   GET  /health            Health check
 """
 
-from pathlib import Path
 import logging
-import uvicorn
+from pathlib import Path
 
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles

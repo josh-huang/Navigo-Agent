@@ -6,8 +6,8 @@ Three checks:
   3. Content safety blocklist
 """
 
-import re
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -16,20 +16,20 @@ logger = logging.getLogger(__name__)
 # Inline <script>, <iframe>, <object>, <embed> — always strip
 DANGEROUS_TAG_PATTERN = re.compile(
     r"<\s*(script|iframe|object|embed|form|input|link|meta|base|applet|frame|frameset|style)\b[^>]*>.*?</\s*\1\s*>",
-    re.I | re.DOTALL,
+    re.IGNORECASE | re.DOTALL,
 )
 
 # Self-closing dangerous tags
 DANGEROUS_SELF_CLOSING = re.compile(
     r"<\s*(script|iframe|object|embed|link|meta|base)\b[^>]*/?>",
-    re.I,
+    re.IGNORECASE,
 )
 
 # Event handler attributes (onclick, onload, etc.)
-EVENT_HANDLER_PATTERN = re.compile(r"\bon\w+\s*=\s*[\"'][^\"']*[\"']", re.I)
+EVENT_HANDLER_PATTERN = re.compile(r"\bon\w+\s*=\s*[\"'][^\"']*[\"']", re.IGNORECASE)
 
 # javascript: URLs
-JAVASCRIPT_URL_PATTERN = re.compile(r"javascript\s*:", re.I)
+JAVASCRIPT_URL_PATTERN = re.compile(r"javascript\s*:", re.IGNORECASE)
 
 
 def _strip_html(raw: str) -> str:
@@ -74,9 +74,9 @@ def _redact_sensitive(raw: str) -> str:
 # ── Content Safety ─────────────────────────────────────────────────────
 
 SAFETY_BLOCKLIST: list[re.Pattern] = [
-    re.compile(r"\b(child\s+(pornography|abuse|exploitation))\b", re.I),
-    re.compile(r"\b(sexual\s+(abuse|assault|violence))\b", re.I),
-    re.compile(r"\b(how\s+to\s+(make|manufacture|build)\s+(a\s+)?(bomb|weapon|explosive))\b", re.I),
+    re.compile(r"\b(child\s+(pornography|abuse|exploitation))\b", re.IGNORECASE),
+    re.compile(r"\b(sexual\s+(abuse|assault|violence))\b", re.IGNORECASE),
+    re.compile(r"\b(how\s+to\s+(make|manufacture|build)\s+(a\s+)?(bomb|weapon|explosive))\b", re.IGNORECASE),
 ]
 
 SAFETY_REPLACEMENT = "[Content removed by safety filter.]"
@@ -110,6 +110,6 @@ def guard_output(raw_output: str) -> str:
         cleaned = _redact_sensitive(cleaned)
         cleaned = _check_content_safety(cleaned)
         return cleaned
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Output guard failed: %s — returning raw output as fallback.", e)
         return raw_output

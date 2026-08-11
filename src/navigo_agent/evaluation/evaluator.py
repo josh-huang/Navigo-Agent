@@ -11,12 +11,12 @@ Usage:
 """
 
 import json
-import time
 import logging
+import time
 from dataclasses import dataclass, field
 
-from navigo_agent.evaluation.test_cases import EVALUATION_CASES
 from navigo_agent.config import get_llm
+from navigo_agent.evaluation.test_cases import EVALUATION_CASES
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ async def _llm_quality_score(query: str, response: str) -> tuple[int, dict]:
         # Overall = average of three dimensions, rounded
         overall = round((scores["relevance"] + scores["completeness"] + scores["faithfulness"]) / 3)
         return overall, scores
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("LLM quality scoring failed: %s — falling back to heuristic.", e)
         return _heuristic_score(response), {
             "relevance": 3, "completeness": 3, "faithfulness": 3,
@@ -141,14 +141,14 @@ async def run_single_eval(case: dict) -> EvalResult:
     start = time.monotonic()
     try:
         result = await run_travel_agent(query)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         elapsed = time.monotonic() - start
         return EvalResult(
             test_id=test_id,
             category=category,
             passed=False,
             latency_seconds=elapsed,
-            notes=f"Exception: {str(e)}",
+            notes=f"Exception: {e!s}",
         )
 
     elapsed = time.monotonic() - start
