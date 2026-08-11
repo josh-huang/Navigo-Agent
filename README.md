@@ -1,4 +1,4 @@
-# TripMate-AI
+# Navigo-Agent
 
 AI-powered travel companion built on LangGraph multi-agent architecture — intelligent itinerary planning, flight search, hotel discovery, and personalized trip management.
 
@@ -29,7 +29,7 @@ Each agent is a node in a `StateGraph`. The workflow streams through flight sear
 ## Project Structure
 
 ```
-TripMate-AI/
+Navigo-Agent/
 ├── app.py                  # FastAPI server, API routes, static mount
 ├── backend.py              # LangGraph state machine, agent nodes, DB connection
 ├── mcp_client.py           # MCP multi-server client (Tavily + AviationStack)
@@ -53,8 +53,8 @@ TripMate-AI/
 
 ```bash
 # 1. Clone & install dependencies
-git clone https://github.com/josh-huang/TripMate-AI.git
-cd TripMate-AI
+git clone https://github.com/josh-huang/Navigo-Agent.git
+cd Navigo-Agent
 uv sync
 
 # 2. Create .env

@@ -5,7 +5,10 @@
 
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <title>TripMate AI</title>
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self';">
+
+    <title>Navigo AI</title>
 
     <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -22,7 +25,7 @@
 
         <section class="hero-section">
             <div class="badge">
-                ✈️ TripMate AI — A Multi-Agent Travel Planner with LangGraph
+                ✈️ Navigo AI — Multi-Agent Travel Planner with Supervisor & Guardrails
             </div>
 
             <h1>
@@ -30,7 +33,7 @@
             </h1>
 
             <p>
-                Search flights, discover hotels, and generate a complete travel itinerary using a multi-agent LangGraph system.
+                Intelligent travel planning powered by a LangGraph supervisor agent that dynamically orchestrates flight search, hotel discovery, weather checks, and itinerary generation.
             </p>
         </section>
 
@@ -75,11 +78,19 @@
                     Thailand Trip
                 </button>
 
-                <button onclick="setPrompt('Give me all country flight info.')">
-                    Global Flights
+                <button onclick="setPrompt('What is the weather like in Tokyo right now?')">
+                    Tokyo Weather
                 </button>
             </div>
 
+        </section>
+
+        <!-- Agent Progress (shown during streaming) -->
+        <section id="progressSection" class="progress-section hidden">
+            <div class="progress-header">
+                <h3>AI Agents at Work</h3>
+            </div>
+            <div id="progressList" class="progress-list"></div>
         </section>
 
         <section id="resultSection" class="result-section hidden">
@@ -106,6 +117,22 @@
                 <div id="resultBox" class="result-box"></div>
             </div>
 
+            <!-- Structured Data Accordions -->
+            <div class="data-accordions">
+                <details class="data-accordion">
+                    <summary>✈️ Flight Search Results</summary>
+                    <pre id="flightData" class="data-pre">No flight data available.</pre>
+                </details>
+                <details class="data-accordion">
+                    <summary>🏨 Hotel Search Results</summary>
+                    <pre id="hotelData" class="data-pre">No hotel data available.</pre>
+                </details>
+                <details class="data-accordion">
+                    <summary>🌤️ Weather Information</summary>
+                    <pre id="weatherData" class="data-pre">No weather data available.</pre>
+                </details>
+            </div>
+
         </section>
 
         <section id="errorBox" class="error-box hidden"></section>
@@ -113,16 +140,25 @@
     </main>
 
     <footer>
-        Built with FastAPI, LangGraph, Groq, PostgreSQL, Tavily and AviationStack
+        Built with FastAPI, LangGraph Supervisor, Groq LLM, PostgreSQL, MCP Tools & Guardrails
     </footer>
 
     <!-- Markdown Renderer -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"
+            integrity="sha384-yQ5I0wCgxBP23epS2KBQrYJuCyw7T1Q26RFuJq3FybmjF/pG2+fr8Wm3YpEOfbp"
+            crossorigin="anonymous"></script>
+
+    <!-- DOMPurify for XSS prevention -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"
+            integrity="sha384-3tUHeCvqN9+N/vb3w2bSjJ4mMn7mK+h1CLKB9LC/NFpn/pFwRJsT6FSSiBWxUOKe"
+            crossorigin="anonymous"></script>
 
     <!-- PDF Download Library -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"
+            integrity="sha384-Gi4k2+cqHTh4yEUAW5D/nQCWDrUIFi2UrB1FvwHYXs3g1zLc6v5qY7dQuHp4M8x"
+            crossorigin="anonymous"></script>
 
-    <!-- Your Custom JS -->
+    <!-- Custom JS -->
     <script src="/static/script.js"></script>
 
 </body>

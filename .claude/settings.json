@@ -1,9 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git -C \"c:\\\\Users\\\\joshh\\\\PyCharmProject\\\\TripMate-AI\" log --oneline --all --graph -30)",
-      "Bash(git -C \"c:\\\\Users\\\\joshh\\\\PyCharmProject\\\\TripMate-AI\" branch -a)",
-      "Bash(git -C \"c:\\\\Users\\\\joshh\\\\PyCharmProject\\\\TripMate-AI\" show --stat --oneline HEAD)",
+      "Bash(git -C \"c:\\\\Users\\\\joshh\\\\PyCharmProject\\\\Navigo-Agent\" log --oneline --all --graph -30)",
+      "Bash(git -C \"c:\\\\Users\\\\joshh\\\\PyCharmProject\\\\Navigo-Agent\" branch -a)",
+      "Bash(git -C \"c:\\\\Users\\\\joshh\\\\PyCharmProject\\\\Navigo-Agent\" show --stat --oneline HEAD)",
       "PowerShell(git commit -m \"Full-stack scaffold: FastAPI app, LangGraph backend, chat UI frontend\")",
       "PowerShell(git commit -m \"Update README with architecture, setup, API docs, and project structure\")",
       "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import ast; ast.parse\\(open\\(r'backend.py', encoding='utf-8'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
@@ -24,7 +24,37 @@
       "Bash(uv run *)",
       "PowerShell(uv run python test.py)",
       "PowerShell($paths = @\\(\"$env:USERPROFILE\\\\.cargo\\\\bin\\\\uv.exe\", \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\", \"$env:LOCALAPPDATA\\\\Programs\\\\uv\\\\uv.exe\"\\); foreach \\($p in $paths\\) { if \\(Test-Path $p\\) { Write-Output $p; break } })",
-      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run python test.py 2>&1)"
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run python test.py 2>&1)",
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run python app.py 2>&1)",
+      "Bash(curl -s http://127.0.0.1:8000)",
+      "Bash(curl -s http://127.0.0.1:8000/health)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8000/static/style.css)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8000/static/script.js)",
+      "Bash(curl -s http://127.0.0.1:8000/static/style.css)",
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run python -c \"import starlette; print\\(starlette.__version__\\)\" 2>&1)",
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run python -c \"import sniffio; print\\('sniffio:', sniffio.__version__\\); import anyio; print\\('anyio:', anyio.__version__\\)\" 2>&1)",
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" add \"starlette<1.6.0\" 2>&1)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8000/)",
+      "Bash(curl -sv http://127.0.0.1:8000/static/style.css)",
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Bash(curl -s -w '\\\\nHTTP:%{http_code}' http://127.0.0.1:8001/static/style.css)",
+      "Bash(../.local/bin/uv sync *)",
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" sync 2>&1)",
+      "Bash(curl -s -o /dev/null -w \"style.css: %{http_code}\\\\n\" http://127.0.0.1:8000/static/style.css)",
+      "Bash(curl -s -o /dev/null -w \"script.js: %{http_code}\\\\n\" http://127.0.0.1:8000/static/script.js)",
+      "Bash(curl -s -o /dev/null -w \"homepage: %{http_code}\\\\n\" http://127.0.0.1:8000/)",
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run python -c \"from langgraph.checkpoint.postgres import AsyncPostgresSaver; print\\('AsyncPostgresSaver exists'\\)\" 2>&1)",
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run python -c \"import langgraph.checkpoint.postgres; print\\(dir\\(langgraph.checkpoint.postgres\\)\\)\" 2>&1)",
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run python -c \"from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver; print\\('found'\\)\" 2>&1)",
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run python -c \"import inspect; from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver; print\\(inspect.signature\\(AsyncPostgresSaver.__init__\\)\\)\" 2>&1)",
+      "PowerShell(& \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\" run python -c \"import inspect; from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver; print\\('setup is coroutine:', inspect.iscoroutinefunction\\(AsyncPostgresSaver.setup\\)\\)\" 2>&1)",
+      "Bash(curl -s -o /dev/null -w \"style: %{http_code}\\\\n\" http://127.0.0.1:8000/static/style.css)",
+      "Bash(curl -s -o /dev/null -w \"script: %{http_code}\\\\n\" http://127.0.0.1:8000/static/script.js)",
+      "Bash(uv sync *)",
+      "Bash(uv add *)",
+      "Bash(PYTHONPATH=src uv run python -c ' *)",
+      "Bash(uv pip *)",
+      "Bash(uv run python -c ' *)"
     ]
   }
 }

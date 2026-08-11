@@ -15,7 +15,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import (
     AnyMessage,
     HumanMessage,
@@ -99,23 +99,19 @@ Return concise travel guidance.
 
 
 # Flight Agent
-def flight_agent(state: TravelState):
+async def flight_agent(state: TravelState):
     print("\nINSIDE FLIGHT AGENT\n")
 
     query = state["user_query"]
 
     try:
 
-        airports = asyncio.run(
-            aviation_mcp_call(
-                "list_airports"
-            )
+        airports = await aviation_mcp_call(
+            "list_airports"
         )
 
-        airlines = asyncio.run(
-            aviation_mcp_call(
-                "list_airlines"
-            )
+        airlines = await aviation_mcp_call(
+            "list_airlines"
         )
 
 
@@ -128,7 +124,7 @@ def flight_agent(state: TravelState):
             airline_data=str(airlines)[:3000]
         )
 
-        response = llm.invoke([
+        response = await llm.ainvoke([
             SystemMessage(
                 content="You are an expert travel flight planner."
             ),
@@ -153,10 +149,10 @@ def flight_agent(state: TravelState):
 
     
 
-def hotel_agent(state: TravelState) -> TravelState:
+async def hotel_agent(state: TravelState) -> TravelState:
     query = f"Best hotels for {state['user_query']}"
     #hotel_data = tavily_search(query)
-    hotel_data = asyncio.run(tavily_mcp_search(query))
+    hotel_data = await tavily_mcp_search(query)
     
     return {
         "hotel_results": hotel_data,
@@ -167,17 +163,13 @@ def hotel_agent(state: TravelState) -> TravelState:
     }
     
 
-def weather_agent(state: TravelState):
+async def weather_agent(state: TravelState):
 
     city = extract_destination(state["user_query"])
 
-    weather_data = asyncio.run(
-        weather_mcp_search(city)
-    )
+    weather_data = await weather_mcp_search(city)
 
-    forecast_data = asyncio.run(
-        forecast_mcp_search(city)
-    )
+    forecast_data = await forecast_mcp_search(city)
 
     return {
         "weather_results": f"""
@@ -196,7 +188,7 @@ def weather_agent(state: TravelState):
 
     
 
-def itinerary_agent(state: TravelState) -> TravelState:
+async def itinerary_agent(state: TravelState) -> TravelState:
     prompt = f"""
 Create a complete travel itinerary based on the following information:
 User Query: {state['user_query']}
@@ -206,11 +198,11 @@ Weather Results: {state['weather_results']}
 
 Make the itinerary practical, budget-aware, and easy to follow.
 """
-    response = llm.invoke([
+    response = await llm.ainvoke([
         SystemMessage(content="You are a travel assistant that creates detailed itineraries based on user queries and search results."),
         HumanMessage(content=prompt)
     ])
-    
+
     return {
         "itinerary": response.content,
         "messages": [response],
@@ -218,7 +210,7 @@ Make the itinerary practical, budget-aware, and easy to follow.
     }
     
     
-def final_agent(state: TravelState) -> TravelState:
+async def final_agent(state: TravelState) -> TravelState:
     final_prompt = f"""
 Generate a final travel plan based on the following information:
 User Query: {state['user_query']}
@@ -243,7 +235,7 @@ Important:
 - Keep the response useful for real travel planning.
 """
 
-    response = llm.invoke([
+    response = await llm.ainvoke([
         SystemMessage(content="You are a professional travel assistant that creates a final travel plan based on user queries and search results."),
         HumanMessage(content=final_prompt)
     ])
@@ -272,10 +264,32 @@ graph.add_edge("final_agent", END)
 
 DATABASE_URL = get_database_url()
 
-_conn = psycopg.connect(DATABASE_URL, autocommit=True, row_factory=dict_row)
 
-checkpointer = PostgresSaver(_conn)
-checkpointer.setup()
+async def _init_checkpointer():
+    """Create async Postgres connection and checkpointer.
+
+    Called once at module level via asyncio.run() — this runs
+    outside any request handler so it will not conflict with
+    the FastAPI/Uvicorn event loop.
+    """
+    async_conn = await psycopg.AsyncConnection.connect(
+        DATABASE_URL,
+        autocommit=True,
+        row_factory=dict_row,
+    )
+    checkpointer = AsyncPostgresSaver(async_conn)
+    await checkpointer.setup()
+    return checkpointer
+
+
+import selectors
+
+checkpointer = asyncio.run(
+    _init_checkpointer(),
+    loop_factory=lambda: asyncio.SelectorEventLoop(
+        selectors.SelectSelector()
+    ),
+)
 
 travel_graph = graph.compile(checkpointer=checkpointer)
 
@@ -283,7 +297,7 @@ travel_graph = graph.compile(checkpointer=checkpointer)
 # Function for FastAPI
 # =========================
 
-def run_travel_agent(user_input: str, thread_id: str | None = None):
+async def run_travel_agent(user_input: str, thread_id: str | None = None):
     if not thread_id:
         thread_id = f"user_{uuid.uuid4().hex}"
 
@@ -293,7 +307,7 @@ def run_travel_agent(user_input: str, thread_id: str | None = None):
         }
     }
 
-    result = travel_graph.invoke(
+    result = await travel_graph.ainvoke(
         {
             "messages": [
                 HumanMessage(content=user_input)
