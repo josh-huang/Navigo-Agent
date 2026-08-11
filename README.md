@@ -32,7 +32,10 @@ Each agent is a node in a `StateGraph`. The workflow streams through flight sear
 TripMate-AI/
 ├── app.py                  # FastAPI server, API routes, static mount
 ├── backend.py              # LangGraph state machine, agent nodes, DB connection
-├── requirements.txt        # Frozen dependencies
+├── mcp_client.py           # MCP multi-server client (Tavily + AviationStack)
+├── mcp_client_test.py      # MCP client test runner
+├── pyproject.toml          # Project metadata & dependencies (uv)
+├── uv.lock                 # Locked dependency versions
 ├── tools/
 │   ├── __init__.py
 │   ├── flight_tool.py      # AviationStack flight search + location resolution
@@ -49,17 +52,12 @@ TripMate-AI/
 ## Setup
 
 ```bash
-# 1. Clone & venv
+# 1. Clone & install dependencies
 git clone https://github.com/josh-huang/TripMate-AI.git
 cd TripMate-AI
-python -m venv .venv
-.venv\Scripts\activate     # Windows
-# source .venv/bin/activate  # macOS/Linux
+uv sync
 
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Create .env
+# 2. Create .env
 cp .env.example .env
 # Fill in:
 #   GROQ_API_KEY=
@@ -85,7 +83,7 @@ cp .env.example .env
 # Development (auto-reload)
 uv run python app.py
 # or
-uvicorn app:app --host 127.0.0.1 --port 8000 --reload
+uv run uvicorn app:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 Open `http://127.0.0.1:8000` — the chat UI loads at `/`.
