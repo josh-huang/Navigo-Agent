@@ -4,13 +4,14 @@ Intent classifier: lightweight first node that determines user intent.
 Routing functions: conditional edges driven by supervisor decisions.
 """
 
-import re
 import logging
-from langchain_core.messages import SystemMessage, HumanMessage
+import re
 
-from navigo_agent.config import get_llm, MAX_SUPERVISOR_LOOPS
-from navigo_agent.state import TravelState
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from navigo_agent.config import MAX_SUPERVISOR_LOOPS, get_llm
 from navigo_agent.graph.supervisor import VALID_AGENT_NODES, _normalize_agent_name
+from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +19,13 @@ logger = logging.getLogger(__name__)
 
 INTENT_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("weather", re.compile(
-        r"\b(weather|temperature|forecast|rain|sunny|cloudy|hot|cold|humid|climate)\b", re.I
+        r"\b(weather|temperature|forecast|rain|sunny|cloudy|hot|cold|humid|climate)\b", re.IGNORECASE
     )),
     ("flights", re.compile(
-        r"\b(flights?|fly|flying|airlines?|airports?|depart(?:ure)?|arrive|arrival|airfare|one.way|round.trip)\b", re.I
+        r"\b(flights?|fly|flying|airlines?|airports?|depart(?:ure)?|arrive|arrival|airfare|one.way|round.trip)\b", re.IGNORECASE
     )),
     ("hotel", re.compile(
-        r"\b(hotels?|motels?|hostels?|airbnb|accommodations?|lodging|stay|resorts?|inns?)\b", re.I
+        r"\b(hotels?|motels?|hostels?|airbnb|accommodations?|lodging|stay|resorts?|inns?)\b", re.IGNORECASE
     )),
 ]
 
@@ -96,7 +97,7 @@ Respond with ONLY the category name (one word). No explanation."""
         result = response.content.strip().lower() if hasattr(response, "content") else "general"
         valid = {"flight", "hotel", "weather", "itinerary", "full_trip", "general"}
         return result if result in valid else "general"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("Intent classification LLM call failed: %s. Defaulting to full_trip.", e)
         return "full_trip"
 

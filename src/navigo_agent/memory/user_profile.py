@@ -10,6 +10,7 @@ so for simplicity we use a lightweight approach:
 
 import json
 import logging
+
 import psycopg
 from pydantic import BaseModel, Field
 
@@ -82,7 +83,7 @@ async def extract_preferences(query: str, response: str) -> UserPreferences:
             text = text[start:end + 1]
         data = json.loads(text)
         return UserPreferences(**data)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("Failed to extract preferences: %s", e)
         return UserPreferences()
 
@@ -109,7 +110,7 @@ async def save_preferences(thread_id: str, prefs: UserPreferences) -> None:
         async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
             await conn.execute(UPSERT_SQL, (thread_id, json.dumps(prefs.model_dump())))
         logger.info("Preferences saved for thread %s", thread_id)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Failed to save preferences: %s", e)
 
 
@@ -118,14 +119,13 @@ async def load_preferences(thread_id: str) -> UserPreferences | None:
     await _ensure_table()
     dsn = get_checkpointer_dsn()
     try:
-        async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(SELECT_SQL, (thread_id,))
-                row = await cur.fetchone()
-                if row:
-                    data = row[0] if isinstance(row[0], dict) else json.loads(row[0])
-                    return UserPreferences(**data)
-    except Exception as e:
+        async with await psycopg.AsyncConnection.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+            await cur.execute(SELECT_SQL, (thread_id,))
+            row = await cur.fetchone()
+            if row:
+                data = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+                return UserPreferences(**data)
+    except Exception as e:  # noqa: BLE001
         logger.error("Failed to load preferences: %s", e)
     return None
 

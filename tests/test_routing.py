@@ -1,6 +1,7 @@
 """Tests for intent classification and routing logic."""
 
 import pytest
+
 from navigo_agent.graph.routing import _fast_path_classify
 
 

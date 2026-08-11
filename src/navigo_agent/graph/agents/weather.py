@@ -1,15 +1,16 @@
 """Weather agent: fetches current weather + forecast via OpenWeatherMap MCP."""
 
 import logging
+
 from langchain_core.messages import AIMessage
 
-from navigo_agent.state import TravelState
 from navigo_agent.mcp import (
-    weather_mcp_search,
-    forecast_mcp_search,
     extract_destination,
     extract_mcp_text,
+    forecast_mcp_search,
+    weather_mcp_search,
 )
+from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +39,16 @@ async def weather_agent(state: TravelState) -> dict:
 
 Forecast:
 {forecast_text}"""
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Weather agent failed: %s", e)
-        weather_text = f"Weather information unavailable: {str(e)}"
+        weather_text = f"Weather information unavailable: {e!s}"
         # Error path: still mark completed and save the extracted destination for reuse
         return {
             "weather_results": weather_text,
             "extracted_destination": city,
             "messages": [AIMessage(content="Weather check encountered an error.")],
             "llm_calls": state.get("llm_calls", 0),
-            "errors": [f"weather_agent: {str(e)}"],
+            "errors": [f"weather_agent: {e!s}"],
             "completed_agents": list(set(state.get("completed_agents", []) + ["weather_agent"])),
         }
 

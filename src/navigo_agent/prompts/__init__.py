@@ -8,15 +8,15 @@ Usage:
 """
 
 from navigo_agent.prompts.loader import (
+    PROMPT_DIR,
+    list_prompts,
     load_prompt,
     render_prompt,
-    list_prompts,
-    PROMPT_DIR,
 )
 
 __all__ = [
+    "PROMPT_DIR",
+    "list_prompts",
     "load_prompt",
     "render_prompt",
-    "list_prompts",
-    "PROMPT_DIR",
 ]

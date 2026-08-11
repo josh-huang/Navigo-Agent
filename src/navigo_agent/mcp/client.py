@@ -12,9 +12,8 @@ from pathlib import Path
 
 import certifi
 from dotenv import load_dotenv
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_groq import ChatGroq
-
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 # ═══════════════════════════════════════════════════════════════════════
 # Environment configuration
@@ -105,7 +104,7 @@ async def get_all_tools():
             print(f"\nAvailable tools from {server_name} MCP:\n")
             for tool in tools:
                 print(tool.name)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001
             print(f"\nCould not connect to {server_name} MCP:\n{error}\n")
 
     return all_tools
@@ -170,7 +169,7 @@ async def initialize_aviation_tools():
         )
 
 
-async def aviation_mcp_call(tool_name: str, tool_args: dict = None):
+async def aviation_mcp_call(tool_name: str, tool_args: dict | None = None):
     await initialize_aviation_tools()
 
     tool = aviation_tools.get(tool_name)

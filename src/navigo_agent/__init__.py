@@ -10,20 +10,21 @@ Usage:
     print(result["answer"])
 """
 
-import uuid
 import logging
+import uuid
+
 from langchain_core.messages import HumanMessage
 
-from navigo_agent.middleware import setup_middleware
 from navigo_agent.graph.builder import get_compiled_graph
+from navigo_agent.middleware import setup_middleware
 from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "TravelState",
     "run_travel_agent",
     "setup_middleware",
-    "TravelState",
 ]
 
 

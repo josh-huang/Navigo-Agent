@@ -18,9 +18,10 @@ Usage:
 import json
 import logging
 import re
-from typing import Literal, Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import Literal
 
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -71,8 +72,8 @@ def parse_react_response(text: str) -> ReActDecision:
     # Attempt 1: direct JSON parse
     try:
         return ReActDecision(**json.loads(cleaned))
-    except (json.JSONDecodeError, Exception):
-        pass
+    except (json.JSONDecodeError, TypeError, ValueError) as e:
+        logger.debug("ReAct JSON parse attempt 1 failed: %s", e)
 
     # Attempt 2: find JSON object via regex
     for pattern in [
@@ -83,8 +84,8 @@ def parse_react_response(text: str) -> ReActDecision:
         if match:
             try:
                 return ReActDecision(**json.loads(match.group()))
-            except (json.JSONDecodeError, Exception):
-                pass
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                logger.debug("ReAct JSON parse attempt 2 failed: %s", e)
 
     # Fallback: treat entire response as final answer
     logger.warning("Failed to parse ReAct JSON. Treating response as final answer.")
@@ -132,7 +133,7 @@ async def run_react_loop(
         try:
             response = await llm.ainvoke(conversation)
             llm_calls += 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error("%s LLM call failed (iter %d): %s", agent_name, iteration, e)
             errors.append(f"{agent_name}(llm,iter={iteration}): {e}")
             break
@@ -152,7 +153,7 @@ async def run_react_loop(
                 if len(observation) > max_observation_chars:
                     observation = observation[:max_observation_chars] + "\n... [truncated]"
                 logger.info("%s: search '%s' → %d chars", agent_name, decision.query[:60], len(observation))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 observation = f"Search failed: {e}"
                 logger.warning("%s: search failed (iter %d): %s", agent_name, iteration, e)
                 errors.append(f"{agent_name}(search,iter={iteration}): {e}")
@@ -189,7 +190,7 @@ async def run_react_loop(
             llm_calls += 1
             decision = parse_react_response(response.content)
             final_answer = decision.content or response.content or "Analysis could not be completed."
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error("%s: forced final answer failed: %s", agent_name, e)
             final_answer = "Information could not be retrieved. Please try a more specific query."
             errors.append(f"{agent_name}(force_final): {e}")

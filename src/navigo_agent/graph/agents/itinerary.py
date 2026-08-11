@@ -7,12 +7,12 @@ and searches for attraction/transport/dining gaps.
 
 import logging
 
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from navigo_agent.config import get_llm
-from navigo_agent.state import TravelState
-from navigo_agent.mcp import tavily_mcp_search, extract_mcp_text
 from navigo_agent.graph.agents.react_utils import run_react_loop
+from navigo_agent.mcp import extract_mcp_text, tavily_mcp_search
+from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
 

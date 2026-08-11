@@ -1,7 +1,6 @@
 """Tests for input/output guardrails."""
 
-import pytest
-from navigo_agent.guardrails.input_guard import guard_input, GuardResult
+from navigo_agent.guardrails.input_guard import GuardResult, guard_input
 from navigo_agent.guardrails.output_guard import guard_output
 
 

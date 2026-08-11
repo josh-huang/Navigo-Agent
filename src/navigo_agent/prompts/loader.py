@@ -85,7 +85,7 @@ def render_prompt(template: str, **kwargs) -> str:
         logger.warning("Missing variable in prompt template: %s", e)
         # Return template with missing vars left in place (graceful degradation)
         return template
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Failed to render prompt template: %s", e)
         return template
 

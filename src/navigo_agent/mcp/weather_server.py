@@ -6,10 +6,11 @@ Exposes two tools: get_current_weather and get_forecast.
 Requires: OPENWEATHER_API_KEY in .env (free tier: https://openweathermap.org/api)
 """
 
-from mcp.server.fastmcp import FastMCP
-import requests
 import os
+
+import requests
 from dotenv import load_dotenv
+from mcp.server.fastmcp import FastMCP
 
 load_dotenv()
 

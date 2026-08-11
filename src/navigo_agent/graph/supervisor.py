@@ -6,10 +6,11 @@ the supervisor uses prompt-engineered JSON output with Pydantic parsing.
 
 import json
 import logging
-from langchain_core.messages import SystemMessage, HumanMessage
+
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
-from navigo_agent.config import get_llm, MAX_SUPERVISOR_LOOPS
+from navigo_agent.config import MAX_SUPERVISOR_LOOPS, get_llm
 from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
@@ -194,7 +195,7 @@ def _parse_supervisor_output(raw: str) -> SupervisorDecision:
                 _normalize_agent_name(a) for a in raw_agents
             ]
         return SupervisorDecision(**data)
-    except (json.JSONDecodeError, Exception) as e:
+    except (json.JSONDecodeError, TypeError, ValueError, KeyError) as e:
         logger.warning("Failed to parse supervisor output: %s. Raw: %.200s", e, raw)
         # Fallback: signal completion to finalize with what we have
         return SupervisorDecision(
@@ -235,14 +236,14 @@ async def supervisor_node(state: TravelState) -> dict:
             HumanMessage(content=prompt),
         ])
         raw_output = response.content if hasattr(response, "content") else str(response)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Supervisor LLM call failed: %s", e)
         return {
             "supervisor_reasoning": f"LLM error: {e}. Finalizing with available data.",
             "pending_agents": [],
             "completed_agents": state.get("completed_agents", []),
             "supervisor_loop_count": loop_count + 1,
-            "errors": [f"supervisor_llm_error: {str(e)}"],
+            "errors": [f"supervisor_llm_error: {e!s}"],
         }
 
     decision = _parse_supervisor_output(raw_output)

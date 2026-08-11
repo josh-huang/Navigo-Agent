@@ -4,8 +4,8 @@ Composable check pipeline — each check returns whether the input is safe.
 Checks are lightweight (regex + keyword heuristics), no LLM calls.
 """
 
-import re
 import logging
+import re
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ def _check_length(user_input: str) -> str | None:
 # ── Check 2: Control Characters ────────────────────────────────────────
 
 # Null bytes, Unicode bidi-override / direction-control characters
-CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f‎‏‪-‮⁦-⁩]")
+CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 
 def _sanitize_control_chars(user_input: str) -> str:
     """Strip null bytes and Unicode direction-control characters."""
@@ -49,26 +49,26 @@ INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
     # Direct override attempts
     ("system_override", re.compile(
         r"(ignore|forget|disregard)\s+(all\s+)?(previous|prior|above|earlier)\s+(instructions?|prompts?|rules?|context)",
-        re.I,
+        re.IGNORECASE,
     )),
     ("role_override", re.compile(
         r"(you\s+are\s+now|act\s+as\s+(a|an)|pretend\s+you\s+are|you\s+must\s+(obey|follow))",
-        re.I,
+        re.IGNORECASE,
     )),
     ("dan_jailbreak", re.compile(
-        r"\bDAN\b.*\b(do\s+anything\s+now|jailbreak)\b", re.I,
+        r"\bDAN\b.*\b(do\s+anything\s+now|jailbreak)\b", re.IGNORECASE,
     )),
     ("delimiter_attack", re.compile(
         r"<\/?system>|<\/?instruction>|\[system\]|\[/system\]|<\|im_start\|>|<\|im_end\|>",
-        re.I,
+        re.IGNORECASE,
     )),
     ("prompt_leak", re.compile(
         r"(reveal|show|print|display|tell\s+me)\s+(your\s+)?(system\s+)?(prompt|instructions?|rules?)",
-        re.I,
+        re.IGNORECASE,
     )),
     ("output_format_hijack", re.compile(
         r"(respond\s+only\s+with|output\s+in\s+JSON|format\s+your\s+response)",
-        re.I,
+        re.IGNORECASE,
     )),
 ]
 
@@ -104,10 +104,10 @@ def _detect_pii(user_input: str) -> list[str]:
 
 # Lightweight keyword heuristic — reject clearly off-topic requests
 OFF_TOPIC_KEYWORDS: list[tuple[str, re.Pattern]] = [
-    ("malware", re.compile(r"\b(write|create|generate)\s+(a\s+)?(virus|malware|ransomware|trojan|worm|exploit)\b", re.I)),
-    ("hacking", re.compile(r"\b(hack\s+(into|the)|crack\s+(a\s+)?password|ddos\s+attack)\b", re.I)),
-    ("illegal_content", re.compile(r"\b(child\s+(porn|abuse)|snuff\s+film|how\s+to\s+(make|manufacture)\s+(drugs?|bombs?))\b", re.I)),
-    ("self_harm", re.compile(r"\b(how\s+to\s+(commit\s+)?suicide|ways\s+to\s+(kill|harm)\s+(myself|yourself))\b", re.I)),
+    ("malware", re.compile(r"\b(write|create|generate)\s+(a\s+)?(virus|malware|ransomware|trojan|worm|exploit)\b", re.IGNORECASE)),
+    ("hacking", re.compile(r"\b(hack\s+(into|the)|crack\s+(a\s+)?password|ddos\s+attack)\b", re.IGNORECASE)),
+    ("illegal_content", re.compile(r"\b(child\s+(porn|abuse)|snuff\s+film|how\s+to\s+(make|manufacture)\s+(drugs?|bombs?))\b", re.IGNORECASE)),
+    ("self_harm", re.compile(r"\b(how\s+to\s+(commit\s+)?suicide|ways\s+to\s+(kill|harm)\s+(myself|yourself))\b", re.IGNORECASE)),
 ]
 
 def _check_topic_boundary(user_input: str) -> str | None:
@@ -115,7 +115,7 @@ def _check_topic_boundary(user_input: str) -> str | None:
     for name, pattern in OFF_TOPIC_KEYWORDS:
         if pattern.search(user_input):
             logger.warning("Input guard: off-topic request blocked (%s).", name)
-            return f"Input blocked: your request appears to be outside the scope of this travel assistant."
+            return "Input blocked: your request appears to be outside the scope of this travel assistant."
     return None
 
 
