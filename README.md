@@ -53,7 +53,7 @@ Navigo-Agent/
 ├── docker-compose.yml             # Local dev: app + PostgreSQL
 ├── pyproject.toml                 # Project metadata & dependencies (uv)
 ├── uv.lock                        # Locked dependency versions
-├── .github/workflows/ci.yml       # CI/CD: lint → test → docker build
+├── .github/workflows/ci.yml       # CI/CD: lint → test + compose smoke → publish image → deploy
 ├── src/navigo_agent/              # Core package
 │   ├── __init__.py                #   Public API: run_travel_agent()
 │   ├── config.py                  #   LLM factory, env vars, LangSmith
@@ -234,6 +234,22 @@ When the agent needs more information the stream ends with a `clarification` eve
 event: clarification
 data: {"thread_id":"user_abc123...","question":"Before I start planning, ...","missing":["destination"]}
 ```
+
+## CI/CD
+
+`.github/workflows/ci.yml` runs on every pull request, every push to `main` and every `v*` tag.
+
+| Job       | When                         | What it does                                                        |
+|-----------|------------------------------|---------------------------------------------------------------------|
+| `lint`    | always                       | `ruff check`                                                        |
+| `test`    | always                       | `pytest` with coverage (everything mocked, no secrets needed)       |
+| `smoke`   | always                       | `docker compose up` with Postgres, then checks `/health` and `/`    |
+| `publish` | push to `main` / `v*` tag    | Builds the image and pushes it to `ghcr.io/josh-huang/navigo-agent` |
+| `deploy`  | push to `main`               | Calls the deploy hook in the `DEPLOY_HOOK_URL` secret, if set       |
+
+Image tags: `latest` (main), `sha-<commit>`, and `1.2.3` / `1.2` for a `v1.2.3` tag.
+
+To enable deployment, add a repository secret named `DEPLOY_HOOK_URL` (for example a Render deploy hook URL). Without it the deploy job is skipped and the image is still published.
 
 ## Testing
 

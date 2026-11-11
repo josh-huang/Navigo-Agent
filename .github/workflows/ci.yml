@@ -1,15 +1,36 @@
 # Navigo-Agent CI/CD Pipeline
 #
-# Triggers on every push and PR to main.
-# Runs: lint → test → docker build verify
+# CI (every push to main, every PR, every v* tag):
+#   lint ─┬─ test
+#         └─ smoke  (docker compose: app + Postgres, wait for /health)
+#
+# CD (push to main or a v* tag, only after CI is green):
+#   publish → build the image and push it to GitHub Container Registry
+#   deploy  → trigger a redeploy via a deploy hook, if one is configured
+#
+# Optional repository secret:
+#   DEPLOY_HOOK_URL — e.g. a Render deploy hook. Without it, deploy is skipped.
 
-name: CI
+name: CI/CD
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
+
+# A newer push to the same branch/PR cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   lint:
@@ -20,6 +41,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.13"
+          enable-cache: true
       - run: uv sync --frozen
       - run: uv run ruff check src/ app.py tests/
 
@@ -32,17 +54,88 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.13"
+          enable-cache: true
       - run: uv sync --frozen
+      # All LLM, tool and database access is mocked — no secrets needed.
+      # DATABASE_URL must stay unset: the app connects to it at import time.
       - run: uv run pytest tests/ -v --tb=short --cov=src/navigo_agent --cov-report=term-missing
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
-  docker:
-    name: Docker Build
+  smoke:
+    name: Smoke test (docker compose)
     runs-on: ubuntu-latest
     needs: [lint]
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker image
-        run: docker build -t navigo-agent:ci -f dockerfile .
+      # docker-compose.yml requires an env file; /health needs no API keys.
+      - run: touch .env
+      - name: Build and start app + Postgres
+        run: docker compose up -d --build --wait --wait-timeout 180
+      - name: Check /health and the home page
+        run: |
+          curl --fail --silent --show-error http://localhost:8000/health
+          curl --fail --silent --show-error --output /dev/null http://localhost:8000/
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Tear down
+        if: always()
+        run: docker compose down --volumes
+
+  publish:
+    name: Publish image (GHCR)
+    runs-on: ubuntu-latest
+    needs: [test, smoke]
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: [publish]
+    if: github.ref == 'refs/heads/main'
+    # One deploy at a time; a newer one waits instead of overlapping.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Trigger deploy hook
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK_URL" ]; then
+            echo "::notice::DEPLOY_HOOK_URL is not set — skipping deploy. The image was still published."
+            exit 0
+          fi
+          curl --fail --silent --show-error --request POST --output /dev/null "$DEPLOY_HOOK_URL"
+          echo "Deploy triggered."
