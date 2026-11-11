@@ -67,6 +67,10 @@ def get_forecast(city: str) -> dict:
     )
     data = response.json()
 
+    # Unknown city / bad key: pass the API error through instead of KeyError
+    if response.status_code != 200 or "list" not in data:
+        return data
+
     # Return first 5 entries — enough for a practical travel forecast
     # without overwhelming the LLM context window
     forecast = []

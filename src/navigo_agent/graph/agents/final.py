@@ -5,6 +5,7 @@ import logging
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from navigo_agent.config import get_llm
+from navigo_agent.graph.slots import format_trip_details
 from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,8 @@ async def final_synthesizer(state: TravelState) -> dict:
     final_prompt = f"""
 Generate a final travel plan based on the following information:
 User Query: {state['user_query']}
+Trip Details:
+{format_trip_details(state.get('trip'))}
 Flight Results: {state.get('flight_results', 'No flight data available.')}
 Hotel Results: {state.get('hotel_results', 'No hotel data available.')}
 Weather Results: {state.get('weather_results', 'No weather data available.')}
@@ -54,11 +57,10 @@ Important:
                     "Please try again or refine your request."
                 )
             ],
-            "llm_calls": state.get("llm_calls", 0),
             "errors": [f"final_synthesizer: {e!s}"],
         }
 
     return {
         "messages": [response],
-        "llm_calls": state.get("llm_calls", 0) + 1,
+        "llm_calls": 1,
     }

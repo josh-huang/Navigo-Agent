@@ -1,5 +1,5 @@
 # ── Builder Stage ────────────────────────────────────────────────────
-FROM python:3.13-slim AS builder
+FROM python:3.14-slim AS builder
 
 WORKDIR /app
 
@@ -7,6 +7,13 @@ WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 ENV UV_COMPILE_BYTECODE=1
+# Build the venv on the image's own interpreter. Without this, uv downloads a
+# managed Python (per .python-version) under /root, the venv links to it, and
+# the runtime stage — which only copies /app/.venv — has no interpreter:
+#   exec /app/.venv/bin/uvicorn: no such file or directory
+# The base image tag must match .python-version.
+ENV UV_PYTHON_DOWNLOADS=never
+ENV UV_PYTHON=/usr/local/bin/python
 ENV UV_LINK_MODE=copy
 
 # Install dependencies separately for layer caching
@@ -20,7 +27,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 # ── Runtime Stage ────────────────────────────────────────────────────
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 

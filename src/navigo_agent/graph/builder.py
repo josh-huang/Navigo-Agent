@@ -1,14 +1,12 @@
 """Graph builder: constructs the supervisor-driven LangGraph state graph.
 
 Architecture:
-  START → intent_classifier → supervisor → [conditional routing]
+  START → intent_classifier → clarify (may pause to ask the user) → supervisor → [conditional routing]
       ├── flight_agent    ──┐
-      ├── hotel_agent     ──┤ (parallel via Send API)
-      ├── weather_agent   ──┘
-      ├── itinerary_agent   (sequential: needs flight+hotel+weather data)
+      ├── hotel_agent     ──┤ parallel fan-out (same superstep) → back to supervisor
+      ├── weather_agent   ──┘ (max 3 supervisor rounds)
+      ├── itinerary_agent ──→ final_synthesizer   (needs flight+hotel+weather data)
       └── final_synthesizer → END
-           ↑
-      supervisor (loop back, max 3 rounds)
 """
 
 import asyncio
@@ -27,8 +25,9 @@ from navigo_agent.graph.agents.hotel import hotel_agent
 from navigo_agent.graph.agents.itinerary import itinerary_agent
 from navigo_agent.graph.agents.weather import weather_agent
 from navigo_agent.graph.routing import (
+    PARALLEL_AGENTS,
+    clarify_node,
     intent_classifier,
-    route_after_agent,
     route_after_supervisor,
 )
 from navigo_agent.graph.supervisor import supervisor_node
@@ -49,6 +48,7 @@ def build_travel_graph() -> StateGraph:
 
     # ── Add nodes ────────────────────────────────────────────────────
     graph.add_node("intent_classifier", intent_classifier)
+    graph.add_node("clarify", clarify_node)
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("flight_agent", flight_agent)
     graph.add_node("hotel_agent", hotel_agent)
@@ -60,10 +60,11 @@ def build_travel_graph() -> StateGraph:
     # Entry: always classify intent first
     graph.add_edge(START, "intent_classifier")
 
-    # Intent → Supervisor
-    graph.add_edge("intent_classifier", "supervisor")
+    # Intent + slots → clarify (interrupts if essentials are missing) → Supervisor
+    graph.add_edge("intent_classifier", "clarify")
+    graph.add_edge("clarify", "supervisor")
 
-    # Supervisor → Conditional: which agents to dispatch
+    # Supervisor → Conditional: one node, or a list of nodes to run in parallel
     graph.add_conditional_edges(
         "supervisor",
         route_after_supervisor,
@@ -76,20 +77,13 @@ def build_travel_graph() -> StateGraph:
         },
     )
 
-    # Each agent → Conditional: more agents or back to supervisor
-    for agent_node in ["flight_agent", "hotel_agent", "weather_agent", "itinerary_agent"]:
-        graph.add_conditional_edges(
-            agent_node,
-            route_after_agent,
-            {
-                "flight_agent": "flight_agent",
-                "hotel_agent": "hotel_agent",
-                "weather_agent": "weather_agent",
-                "itinerary_agent": "itinerary_agent",
-                "supervisor": "supervisor",
-                "final_synthesizer": "final_synthesizer",
-            },
-        )
+    # Data agents fan in to the supervisor. When several run in parallel the
+    # supervisor is triggered ONCE, after the whole batch has finished.
+    for agent_node in PARALLEL_AGENTS:
+        graph.add_edge(agent_node, "supervisor")
+
+    # The itinerary is the last data-producing step — nothing left to decide.
+    graph.add_edge("itinerary_agent", "final_synthesizer")
 
     # Final synthesizer → END
     graph.add_edge("final_synthesizer", END)

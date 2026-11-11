@@ -1,102 +1,99 @@
-"""Shared ReAct loop utilities for all Tavily-search-based agents.
+"""Shared ReAct loop for the Tavily-search agents — native tool calling.
 
-Extracted from flight.py — the same ReActDecision model, JSON parser,
-and observation loop are reused by flight_agent, hotel_agent, and
-itinerary_agent.
+The LLM is given a single `web_search` tool via `bind_tools()`. Each turn it
+either emits tool calls (→ we run the searches and feed the results back as
+ToolMessages) or answers in plain markdown (→ that is the final answer).
+
+This replaces the earlier hand-rolled protocol where the model had to wrap
+both its actions and its whole markdown answer inside a JSON string, which
+broke whenever the model mis-escaped a quote or newline.
 
 Each agent only needs to supply:
-  - A system prompt builder function
-  - An initial HumanMessage
-  - Temperature and agent-specific config
-
-Usage:
-    from navigo_agent.graph.agents.react_utils import (
-        ReActDecision, parse_react_response, run_react_loop,
-    )
+  - A system prompt + initial HumanMessage
+  - An async search function (query -> text)
 """
 
-import json
+import asyncio
 import logging
-import re
 from collections.abc import Awaitable, Callable
-from typing import Literal
 
-from langchain_core.messages import AIMessage, HumanMessage
-from pydantic import BaseModel, Field
+from langchain_core.messages import HumanMessage, ToolMessage
 
 logger = logging.getLogger(__name__)
 
 MAX_REACT_ITERATIONS = 3
 MAX_OBSERVATION_CHARS = 3000
 
+SEARCH_TOOL_NAME = "web_search"
 
-# ── ReAct Decision Model ──────────────────────────────────────────────
+# OpenAI-style function schema — accepted by ChatGroq.bind_tools()
+WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": SEARCH_TOOL_NAME,
+        "description": (
+            "Search the web for real-time travel information (flights, airlines, hotels, "
+            "neighbourhoods, attractions, transport, prices). Returns text snippets."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A specific, self-contained search query.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
 
-class ReActDecision(BaseModel):
-    """Single step in the ReAct loop — parsed from LLM JSON output."""
-    reasoning: str = Field(description="What info do I still need, and why?")
-    action: Literal["search", "final_answer"] = Field(
-        description="'search' to run a web search, 'final_answer' to produce the result"
-    )
-    query: str | None = Field(
-        default=None,
-        description="Targeted search query (required when action='search')",
-    )
-    content: str | None = Field(
-        default=None,
-        description="Final formatted content (required when action='final_answer')",
-    )
-
-
-# ── JSON Parsing (defensive, 3-level fallback) ────────────────────────
-
-def parse_react_response(text: str) -> ReActDecision:
-    """Parse LLM output into ReActDecision. Falls back to final_answer on failure.
-
-    Strategy:
-      1. Strip markdown code fences, try direct JSON parse
-      2. Regex-extract JSON object, try parse
-      3. Fallback: treat entire response as final_answer
-    """
-    cleaned = text.strip()
-
-    # Strip markdown code fences
-    if cleaned.startswith("```"):
-        lines = cleaned.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        cleaned = "\n".join(lines).strip()
-
-    # Attempt 1: direct JSON parse
-    try:
-        return ReActDecision(**json.loads(cleaned))
-    except (json.JSONDecodeError, TypeError, ValueError) as e:
-        logger.debug("ReAct JSON parse attempt 1 failed: %s", e)
-
-    # Attempt 2: find JSON object via regex
-    for pattern in [
-        r'\{[^{}]*"action"\s*:\s*"[^"]*"[^{}]*\}',
-        r'\{.*\}',
-    ]:
-        match = re.search(pattern, cleaned, re.DOTALL)
-        if match:
-            try:
-                return ReActDecision(**json.loads(match.group()))
-            except (json.JSONDecodeError, TypeError, ValueError) as e:
-                logger.debug("ReAct JSON parse attempt 2 failed: %s", e)
-
-    # Fallback: treat entire response as final answer
-    logger.warning("Failed to parse ReAct JSON. Treating response as final answer.")
-    return ReActDecision(
-        reasoning="Parsing failed, defaulting to final answer.",
-        action="final_answer",
-        content=text[:3000],
-    )
+FORCE_FINAL_PROMPT = (
+    "You have used all your searches. Write your final answer now, in markdown, "
+    "using only the information gathered above. Do not call any tools."
+)
+FALLBACK_ANSWER = "Information could not be retrieved. Please try a more specific query."
 
 
-# ── ReAct Loop Runner ─────────────────────────────────────────────────
+def _text(response) -> str:
+    """Plain text of an AIMessage (content may be a list of blocks)."""
+    content = getattr(response, "content", "")
+    if isinstance(content, list):
+        content = "".join(
+            block.get("text", "") if isinstance(block, dict) else str(block) for block in content
+        )
+    return str(content or "").strip()
+
+
+async def _run_search(
+    call: dict,
+    search_fn: Callable[[str], Awaitable[str]],
+    agent_name: str,
+    max_observation_chars: int,
+    errors: list[str],
+) -> ToolMessage:
+    """Execute one tool call. Always returns a ToolMessage — never raises."""
+    call_id = call.get("id") or ""
+    args = call.get("args") or {}
+    query = str(args.get("query") or "").strip() if isinstance(args, dict) else ""
+
+    if call.get("name") != SEARCH_TOOL_NAME:
+        observation = f"Unknown tool '{call.get('name')}'. The only tool is {SEARCH_TOOL_NAME}."
+    elif not query:
+        observation = "Search failed: the 'query' argument was empty."
+    else:
+        try:
+            observation = await search_fn(query)
+            if len(observation) > max_observation_chars:
+                observation = observation[:max_observation_chars] + "\n... [truncated]"
+            logger.info("%s: search '%s' → %d chars", agent_name, query[:60], len(observation))
+        except Exception as e:  # noqa: BLE001
+            observation = f"Search failed: {e}"
+            logger.warning("%s: search failed: %s", agent_name, e)
+            errors.append(f"{agent_name}(search): {e}")
+
+    return ToolMessage(content=observation, tool_call_id=call_id, name=SEARCH_TOOL_NAME)
+
 
 async def run_react_loop(
     *,
@@ -108,91 +105,65 @@ async def run_react_loop(
     max_observation_chars: int = MAX_OBSERVATION_CHARS,
     llm_calls: int = 0,
 ) -> tuple[str, int, list[str]]:
-    """Run a generic ReAct loop: reason → search → observe → repeat → final answer.
+    """Tool-calling ReAct loop: reason → web_search → observe → ... → final answer.
 
     Args:
-        llm: Configured ChatGroq instance.
-        conversation: Initial message list (SystemMessage + HumanMessage).
-        search_fn: Async callable that takes a query string and returns result text
-                   (already unwrapped from MCP format).
-        agent_name: Used in log messages for traceability.
-        max_iterations: Max ReAct iterations before forcing final answer.
-        max_observation_chars: Truncate each observation to this length.
-        llm_calls: Starting LLM call count (accumulated).
+        llm: Chat model supporting `bind_tools()` (ChatGroq).
+        conversation: Initial message list (SystemMessage + HumanMessage). Mutated.
+        search_fn: Async callable: query string → result text.
+        agent_name: Used in log / error messages.
+        max_iterations: Max search rounds before a final answer is forced.
+        max_observation_chars: Truncate each search result to this length.
+        llm_calls: Starting count (default 0 → the return value is this loop's own calls).
 
     Returns:
         (final_answer: str, total_llm_calls: int, errors: list[str])
     """
-    final_answer = ""
     errors: list[str] = []
+    tool_llm = llm.bind_tools([WEB_SEARCH_TOOL])
+    # Tools stay declared (the history contains tool messages) but may not be called.
+    final_llm = llm.bind_tools([WEB_SEARCH_TOOL], tool_choice="none")
+
+    final_answer = ""
+    need_forced_final = True
 
     for iteration in range(1, max_iterations + 1):
-        logger.info("%s ReAct iteration %d/%d", agent_name, iteration, max_iterations)
+        logger.info("%s ReAct round %d/%d", agent_name, iteration, max_iterations)
 
-        # --- Reason + Act ---
         try:
-            response = await llm.ainvoke(conversation)
+            response = await tool_llm.ainvoke(conversation)
             llm_calls += 1
         except Exception as e:  # noqa: BLE001
-            logger.error("%s LLM call failed (iter %d): %s", agent_name, iteration, e)
+            # e.g. the provider rejecting a malformed tool call — fall through
+            # to a tool-free final answer with whatever has been gathered.
+            logger.error("%s LLM call failed (round %d): %s", agent_name, iteration, e)
             errors.append(f"{agent_name}(llm,iter={iteration}): {e}")
             break
 
-        decision = parse_react_response(response.content)
-
-        # --- Final Answer ---
-        if decision.action == "final_answer" and decision.content:
-            final_answer = decision.content.strip()
-            logger.info("%s: final answer at iteration %d", agent_name, iteration)
+        tool_calls = getattr(response, "tool_calls", None) or []
+        if not tool_calls:
+            final_answer = _text(response)
+            need_forced_final = not final_answer
+            if final_answer:
+                logger.info("%s: final answer at round %d", agent_name, iteration)
             break
 
-        # --- Search ---
-        if decision.action == "search" and decision.query:
-            try:
-                observation = await search_fn(decision.query)
-                if len(observation) > max_observation_chars:
-                    observation = observation[:max_observation_chars] + "\n... [truncated]"
-                logger.info("%s: search '%s' → %d chars", agent_name, decision.query[:60], len(observation))
-            except Exception as e:  # noqa: BLE001
-                observation = f"Search failed: {e}"
-                logger.warning("%s: search failed (iter %d): %s", agent_name, iteration, e)
-                errors.append(f"{agent_name}(search,iter={iteration}): {e}")
+        # Every tool call must be answered, so run them all (concurrently).
+        conversation.append(response)
+        conversation.extend(await asyncio.gather(*(
+            _run_search(call, search_fn, agent_name, max_observation_chars, errors)
+            for call in tool_calls
+        )))
 
-            conversation.append(AIMessage(content=response.content))
-            conversation.append(HumanMessage(
-                content=f"[Search results for: {decision.query}]\n\n{observation}\n\n"
-                        f"What specific information are you still missing? "
-                        f"If you have enough data, provide your final answer. "
-                        f"Otherwise, search for the missing piece with a refined query."
-            ))
-            continue
-
-        # --- Unparseable → nudge the LLM ---
-        logger.warning("%s: unparseable response at iteration %d", agent_name, iteration)
-        conversation.append(AIMessage(content=response.content))
-        conversation.append(HumanMessage(
-            content='I could not parse your response. Reply with ONLY a JSON object:\n'
-                    '{"action": "search", "query": "<your search query>", "reasoning": "..."}\n'
-                    'or\n'
-                    '{"action": "final_answer", "content": "Your answer...", "reasoning": "..."}'
-        ))
-
-    # ── Force final answer if loop exhausted ───────────────────────────
-    if not final_answer:
-        logger.warning("%s: max ReAct iterations reached. Forcing final answer.", agent_name)
+    if need_forced_final:
+        logger.info("%s: forcing final answer without tools.", agent_name)
+        conversation.append(HumanMessage(content=FORCE_FINAL_PROMPT))
         try:
-            conversation.append(HumanMessage(
-                content="You have reached the maximum number of searches. "
-                        "Produce your best analysis now with the data you have. "
-                        'Respond with {"action": "final_answer", "content": "..."}'
-            ))
-            response = await llm.ainvoke(conversation)
+            response = await final_llm.ainvoke(conversation)
             llm_calls += 1
-            decision = parse_react_response(response.content)
-            final_answer = decision.content or response.content or "Analysis could not be completed."
+            final_answer = _text(response)
         except Exception as e:  # noqa: BLE001
             logger.error("%s: forced final answer failed: %s", agent_name, e)
-            final_answer = "Information could not be retrieved. Please try a more specific query."
             errors.append(f"{agent_name}(force_final): {e}")
 
-    return final_answer, llm_calls, errors
+    return final_answer or FALLBACK_ANSWER, llm_calls, errors

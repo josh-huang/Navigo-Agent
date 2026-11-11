@@ -5,3 +5,9 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+# Secrets and VCS — never send to the build context
+.env
+.env.*
+.git
+.github
+tests/

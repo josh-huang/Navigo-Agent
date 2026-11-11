@@ -11,9 +11,6 @@ Usage:
 """
 
 import logging
-import uuid
-
-from langchain_core.messages import HumanMessage
 
 from navigo_agent.middleware import setup_middleware
 from navigo_agent.state import TravelState
@@ -27,61 +24,65 @@ __all__ = [
 ]
 
 
-async def run_travel_agent(user_input: str, thread_id: str | None = None) -> dict:
+async def run_travel_agent(
+    user_input: str,
+    thread_id: str | None = None,
+    *,
+    allow_clarification: bool = True,
+) -> dict:
     """Run the travel planning graph with the given user input.
 
     Args:
-        user_input: Natural language travel request.
-        thread_id: Optional thread ID for session continuity (checkpointing).
-                   If not provided, a new thread is created.
+        user_input: Natural language travel request — or, when `thread_id`
+                    refers to a run paused on a clarification question, the
+                    user's reply to that question.
+        thread_id: Thread returned by a previous call. Only used to resume a
+                   paused run; finished threads are never reused.
+        allow_clarification: False → never pause to ask the user (batch/eval).
 
     Returns:
         dict with keys: thread_id, answer, flight_results, hotel_results,
-                        weather_results, itinerary, llm_calls
+                        weather_results, itinerary, llm_calls,
+                        needs_clarification, question, missing.
+        When needs_clarification is True, `answer` is the question and the
+        caller should send the user's reply with the same thread_id.
     """
-    # Always create a fresh thread for each invocation.
-    # Reusing a completed thread causes state accumulation (messages grow
-    # unbounded via operator.add) which confuses the LLM and can overflow
-    # the context window on subsequent requests.
-    # Multi-turn support can be added later with proper state trimming.
-    thread_id = f"user_{uuid.uuid4().hex}"
-
-    config = {"configurable": {"thread_id": thread_id}}
-
     from navigo_agent.graph.builder import get_compiled_graph
+    from navigo_agent.session import clarification_from_result, plan_run
 
     graph = get_compiled_graph()
+    plan = await plan_run(graph, user_input, thread_id, allow_clarification=allow_clarification)
 
     try:
-        result = await graph.ainvoke(
-            {
-                "messages": [HumanMessage(content=user_input)],
-                "user_query": user_input,
-                "user_intent": "",
-                "extracted_destination": None,
-                "supervisor_reasoning": "",
-                "supervisor_loop_count": 0,
-                "flight_results": "",
-                "hotel_results": "",
-                "weather_results": "",
-                "itinerary": "",
-                "pending_agents": [],
-                "completed_agents": [],
-                "llm_calls": 0,
-                "errors": [],
-            },
-            config=config,
-        )
+        result = await graph.ainvoke(plan.graph_input, config=plan.config)
     except Exception:
-        logger.exception("Graph invocation failed for thread %s", thread_id)
+        logger.exception("Graph invocation failed for thread %s", plan.thread_id)
         raise
+
+    clarification = clarification_from_result(result)
+    if clarification:
+        return {
+            "thread_id": plan.thread_id,
+            "answer": clarification["question"],
+            "needs_clarification": True,
+            "question": clarification["question"],
+            "missing": clarification["missing"],
+            "flight_results": "",
+            "hotel_results": "",
+            "weather_results": "",
+            "itinerary": "",
+            "llm_calls": result.get("llm_calls", 0),
+        }
 
     messages = result.get("messages", [])
     final_answer = messages[-1].content if messages else "No response generated."
 
     return {
-        "thread_id": thread_id,
+        "thread_id": plan.thread_id,
         "answer": final_answer,
+        "needs_clarification": False,
+        "question": None,
+        "missing": [],
         "flight_results": result.get("flight_results", ""),
         "hotel_results": result.get("hotel_results", ""),
         "weather_results": result.get("weather_results", ""),

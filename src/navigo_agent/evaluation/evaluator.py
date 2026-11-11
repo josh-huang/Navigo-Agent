@@ -140,7 +140,7 @@ async def run_single_eval(case: dict) -> EvalResult:
 
     start = time.monotonic()
     try:
-        result = await run_travel_agent(query)
+        result = await run_travel_agent(query, allow_clarification=False)
     except Exception as e:  # noqa: BLE001
         elapsed = time.monotonic() - start
         return EvalResult(

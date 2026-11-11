@@ -6,11 +6,12 @@ AI-powered multi-agent travel planner built on LangGraph with Supervisor routing
 
 ```
 User → FastAPI → Input Guard → LangGraph StateGraph
-                                    ├── Intent Classifier (regex fast-path + LLM fallback)
+                                    ├── Intent Classifier + Trip Slot Extraction (1 LLM call)
+                                    ├── Clarify (pauses to ask the user if essentials are missing)
                                     ├── Supervisor Agent (LLM JSON routing, max 3 loops)
-                                    ├── ✈️ Flight Agent (ReAct over Tavily web search)
-                                    ├── 🏨 Hotel Agent  (ReAct over Tavily web search)
-                                    ├── 🌤️ Weather Agent (OpenWeather MCP)
+                                    ├── ✈️ Flight Agent (ReAct over Tavily web search)   ┐
+                                    ├── 🏨 Hotel Agent  (ReAct over Tavily web search)   ├ run in parallel
+                                    ├── 🌤️ Weather Agent (OpenWeather MCP)               ┘
                                     ├── 🗺️ Itinerary Agent (ReAct over Tavily + peer data)
                                     └── ✨ Final Synthesizer (polished output)
                                           ↓
@@ -19,8 +20,11 @@ User → FastAPI → Input Guard → LangGraph StateGraph
 
 **Key Design Decisions:**
 
-- **ReAct Multi-Hop Search**: Each search agent runs up to 3 iterations of Reason → Search → Observe → Repeat. The LLM varies the Tavily search query (not the API endpoint) for multi-hop retrieval — broad search → gap detection → targeted search → final answer.
-- **Supervisor without native tool calling**: Groq's `bind_tools` support is incomplete → supervisor uses prompt-engineered JSON output with Pydantic parsing and 3-level fallback.
+- **ReAct Multi-Hop Search (native tool calling)**: Each search agent gets a `web_search` tool via `bind_tools()` and runs up to 3 rounds of Reason → Search → Observe. Final answers are plain markdown, not JSON-wrapped. If a tool-calling request fails, the agent falls back to a tool-free answer.
+- **Structured trip slots**: One LLM call at graph entry extracts intent plus origin, destination, dates, duration, travelers, budget and interests; every agent receives them.
+- **Clarification (human-in-the-loop)**: If essentials are missing (destination; origin for flight queries; trip length for trip plans), the graph pauses with a LangGraph `interrupt()` and asks once. The reply resumes the same thread via the Postgres checkpointer.
+- **Parallel dispatch**: Flight, hotel and weather agents run concurrently in one superstep and fan in to the supervisor.
+- **Supervisor JSON routing**: the supervisor uses prompt-engineered JSON output with Pydantic parsing and a safe fallback.
 - **Shared ReAct infrastructure**: `react_utils.py` provides a generic `run_react_loop()` used by flight, hotel, and itinerary agents — DRY, testable, and extensible.
 - **Guardrails**: Input guard (length, injection detection, PII scanning, topic boundary) + Output guard (HTML strip, sensitive redaction, content safety).
 - **SSE Streaming**: Real-time agent progress via `POST /api/travel/stream` — frontend renders progress indicators as each agent completes.
@@ -45,11 +49,11 @@ User → FastAPI → Input Guard → LangGraph StateGraph
 ```
 Navigo-Agent/
 ├── app.py                         # FastAPI entry point, API routes
-├── dockerfile                     # Multi-stage Docker build (Python 3.13-slim)
+├── dockerfile                     # Multi-stage Docker build (Python 3.14-slim)
 ├── docker-compose.yml             # Local dev: app + PostgreSQL
 ├── pyproject.toml                 # Project metadata & dependencies (uv)
 ├── uv.lock                        # Locked dependency versions
-├── .github/workflows/ci.yml       # CI/CD: lint → test → docker build
+├── .github/workflows/ci.yml       # CI/CD: lint → test + compose smoke → publish image → deploy
 ├── src/navigo_agent/              # Core package
 │   ├── __init__.py                #   Public API: run_travel_agent()
 │   ├── config.py                  #   LLM factory, env vars, LangSmith
@@ -180,6 +184,7 @@ Response:
 ```json
 {
   "success": true,
+  "needs_clarification": false,
   "thread_id": "user_abc123...",
   "answer": "## Trip Summary\n...",
   "flight_results": "...",
@@ -189,6 +194,21 @@ Response:
   "llm_calls": 5
 }
 ```
+
+If essential details are missing, the agent asks instead of planning:
+
+```json
+{
+  "success": true,
+  "needs_clarification": true,
+  "thread_id": "user_abc123...",
+  "question": "Before I start planning, one quick question: Where would you like to go?",
+  "missing": ["destination"]
+}
+```
+
+Send the user's reply as `message` with the same `thread_id` to continue that run.
+A `thread_id` is only used to resume a paused run — every other request starts fresh.
 
 ### `POST /api/travel/stream`
 
@@ -207,6 +227,29 @@ data: {"agent":"flight_agent","display":"Searching flights","icon":"✈️","sta
 event: complete
 data: {"thread_id":"user_abc123...","answer":"## Trip Summary\n...","llm_calls":5}
 ```
+
+When the agent needs more information the stream ends with a `clarification` event instead of `complete`:
+
+```
+event: clarification
+data: {"thread_id":"user_abc123...","question":"Before I start planning, ...","missing":["destination"]}
+```
+
+## CI/CD
+
+`.github/workflows/ci.yml` runs on every pull request, every push to `main` and every `v*` tag.
+
+| Job       | When                         | What it does                                                        |
+|-----------|------------------------------|---------------------------------------------------------------------|
+| `lint`    | always                       | `ruff check`                                                        |
+| `test`    | always                       | `pytest` with coverage (everything mocked, no secrets needed)       |
+| `smoke`   | always                       | `docker compose up` with Postgres, then checks `/health` and `/`    |
+| `publish` | push to `main` / `v*` tag    | Builds the image and pushes it to `ghcr.io/josh-huang/navigo-agent` |
+| `deploy`  | push to `main`               | Calls the deploy hook in the `DEPLOY_HOOK_URL` secret, if set       |
+
+Image tags: `latest` (main), `sha-<commit>`, and `1.2.3` / `1.2` for a `v1.2.3` tag.
+
+To enable deployment, add a repository secret named `DEPLOY_HOOK_URL` (for example a Render deploy hook URL). Without it the deploy job is skipped and the image is still published.
 
 ## Testing
 

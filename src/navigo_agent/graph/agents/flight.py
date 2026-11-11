@@ -1,4 +1,4 @@
-"""Flight agent: ReAct loop over Tavily web search.
+"""Flight agent: ReAct loop over Tavily web search (native tool calling).
 
 Uses the shared react_utils module for the ReAct loop — only provides
 the system prompt builder and the search function (Tavily via MCP).
@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from navigo_agent.config import get_llm
 from navigo_agent.graph.agents.react_utils import run_react_loop
+from navigo_agent.graph.slots import TripSlots, format_trip_details
 from navigo_agent.mcp import extract_mcp_text, tavily_mcp_search
 from navigo_agent.state import TravelState
 
@@ -20,31 +21,27 @@ MAX_REACT_ITERATIONS = 3
 
 # ── Prompt builder ────────────────────────────────────────────────────
 
-def _build_react_system_prompt(destination: str, user_query: str) -> str:
+def _build_react_system_prompt(route: str, user_query: str, trip_details: str) -> str:
     """Build the ReAct system prompt with output format and search guidance."""
-    return f"""You are an expert flight travel researcher. You have access to a Tavily web search tool that returns real-time flight, airline, and travel information.
+    return f"""You are an expert flight travel researcher. You have access to a `web_search` tool (Tavily) that returns real-time flight, airline, and travel information.
 
 ## Your Goal
 
-Answer the user's flight-related query thoroughly. To do this, you can run up to {MAX_REACT_ITERATIONS} web searches before producing your final answer.
+Answer the user's flight-related query thoroughly. To do this, you can run up to {MAX_REACT_ITERATIONS} rounds of web searches before producing your final answer.
 
 ## Search Strategy (Multi-Hop)
 
 Don't try to get everything in one search. Instead:
-1. **First search**: broad flight info — "{destination} flights airlines routes airports"
+1. **First search**: broad flight info — "{route} flights airlines routes airports"
 2. **Review gaps**: do you have airline names? price ranges? airport codes?
 3. **Second search** (if needed): target the gap — e.g. "Singapore Airlines Tokyo Narita direct flight price 2026"
 4. **Third search** (if needed): practical tips — baggage, booking timing, peak season for the route
 
-## Output Format
+## How to Work
 
-Respond with ONLY a JSON object (no markdown, no extra text):
-
-**To search the web:**
-{{"reasoning": "I have general route info but no specific airline names. I need to search for airlines on this route.", "action": "search", "query": "airlines flying Singapore to Tokyo direct flights 2026"}}
-
-**To give your final answer:**
-{{"reasoning": "I now have airport codes (SIN → NRT/HND), major airlines (Singapore Airlines, ANA, JAL, Scoot, Zipair), typical prices, and booking tips.", "action": "final_answer", "content": "## Flight Options: Singapore → Tokyo\\n\\n**Airports:** ...\\n\\n**Airlines:** ...\\n\\n**Estimated Airfare:** ...\\n\\n**Tips:** ..."}}
+- To look something up, call the `web_search` tool with a specific query. You may call it several times.
+- When you have enough information, reply with your final answer as plain markdown — no JSON, no tool call.
+- Start the final answer with a heading such as `## Flight Options: <origin> → <destination>`.
 
 ## Final Answer Requirements
 
@@ -62,6 +59,10 @@ Cover these points (mark "N/A — not found in search" if genuinely unavailable)
 - If a search returns nothing useful, try a broader/different angle
 - Never fabricate specific prices or flight numbers
 - After {MAX_REACT_ITERATIONS} searches, you MUST produce a final answer with whatever you have
+
+## Trip Details (extracted from the query)
+
+{trip_details}
 
 ## User's Travel Query
 
@@ -85,10 +86,15 @@ async def flight_agent(state: TravelState) -> dict:
     prompt building and the Tavily search function.
     """
     query = state["user_query"]
-    destination = state.get("extracted_destination") or query
+    slots = TripSlots(**(state.get("trip") or {}))
+    destination = slots.destination or state.get("extracted_destination")
+    if slots.origin and destination:
+        route = f"{slots.origin} to {destination}"
+    else:
+        route = destination or query
     logger.info("Flight agent (ReAct): processing '%s'", query[:80])
 
-    system_prompt = _build_react_system_prompt(destination, query)
+    system_prompt = _build_react_system_prompt(route, query, format_trip_details(state.get("trip")))
     conversation: list = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=f"Find flight information for: {query}"),
@@ -102,18 +108,13 @@ async def flight_agent(state: TravelState) -> dict:
         search_fn=_search_flights,
         agent_name="flight_agent",
         max_iterations=MAX_REACT_ITERATIONS,
-        llm_calls=state.get("llm_calls", 0),
     )
 
-    # ── Build state update ─────────────────────────────────────────────
-    completed = list(set(state.get("completed_agents", []) + ["flight_agent"]))
-    pending = [a for a in state.get("pending_agents", []) if a != "flight_agent"]
-
+    # State update: deltas only — reducers merge them with parallel agents' writes.
     return {
         "flight_results": final_answer,
         "messages": [AIMessage(content=final_answer)],
         "llm_calls": llm_calls,
-        "errors": state.get("errors", []) + errors,
-        "completed_agents": completed,
-        "pending_agents": pending,
+        "errors": errors,
+        "completed_agents": ["flight_agent"],
     }

@@ -1,4 +1,4 @@
-"""Itinerary agent: ReAct loop over Tavily web search.
+"""Itinerary agent: ReAct loop over Tavily web search (native tool calling).
 
 Uses the shared react_utils module. Unlike flight/hotel, this agent
 starts with pre-collected data (flight, hotel, weather) already in state
@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from navigo_agent.config import get_llm
 from navigo_agent.graph.agents.react_utils import run_react_loop
+from navigo_agent.graph.slots import format_trip_details
 from navigo_agent.mcp import extract_mcp_text, tavily_mcp_search
 from navigo_agent.state import TravelState
 
@@ -27,9 +28,10 @@ def _build_react_system_prompt(
     flight_data: str,
     hotel_data: str,
     weather_data: str,
+    trip_details: str,
 ) -> str:
     """Build the ReAct system prompt — includes pre-collected peer agent data."""
-    return f"""You are an expert travel itinerary planner. You have access to a Tavily web search tool for real-time attraction, transport, and local information.
+    return f"""You are an expert travel itinerary planner. You have access to a `web_search` tool (Tavily) for real-time attraction, transport, and local information.
 
 ## Pre-Collected Data
 
@@ -46,7 +48,7 @@ Your peer agents have already gathered the following data. Use it — don't re-s
 
 ## Your Goal
 
-Create a detailed, practical day-by-day travel itinerary for the user. You can run up to {MAX_REACT_ITERATIONS} web searches to fill gaps before producing your final plan.
+Create a detailed, practical day-by-day travel itinerary for the user. You can run up to {MAX_REACT_ITERATIONS} rounds of web searches to fill gaps before producing your final plan.
 
 ## Search Strategy (Multi-Hop)
 
@@ -56,15 +58,11 @@ Don't try to get everything in one search. Instead:
 3. **Second search** (if needed): target the gap — e.g. "{destination} to Kyoto train schedule price" or "{destination} Shinjuku to Asakusa travel time"
 4. **Third search** (if needed): local tips — "{destination} hidden gems local food neighbourhood guide" or seasonal events
 
-## Output Format
+## How to Work
 
-Respond with ONLY a JSON object (no markdown, no extra text):
-
-**To search the web:**
-{{"reasoning": "I have attractions listed but no transport logistics between sites. Day 2 involves moving from Shinjuku to Asakusa — I need to know the best route and travel time.", "action": "search", "query": "Tokyo Shinjuku to Asakusa best transport route travel time"}}
-
-**To give your final answer:**
-{{"reasoning": "I now have all attractions, transport logistics, dining recommendations, and weather context to build a complete day-by-day itinerary.", "action": "final_answer", "content": "## {destination} Itinerary\\n\\n### Day 1: ...\\n\\n**Morning (9:00 - 12:00):** ...\\n**Lunch:** ...\\n**Afternoon (13:00 - 17:00):** ...\\n**Evening:** ...\\n\\n### Day 2: ...\\n..."}}
+- To look something up, call the `web_search` tool with a specific query. You may call it several times.
+- When you have enough information, reply with your final answer as plain markdown — no JSON, no tool call.
+- Structure the final answer as `### Day N: <theme>` sections with Morning / Lunch / Afternoon / Evening blocks.
 
 ## Final Answer Requirements
 
@@ -83,6 +81,10 @@ Respond with ONLY a JSON object (no markdown, no extra text):
 - Leverage the pre-collected flight/hotel/weather data — don't re-search those topics
 - After {MAX_REACT_ITERATIONS} searches, you MUST produce a final itinerary with whatever you have
 - Use markdown formatting (## headings, bullet points, **bold** for times/locations) for readability
+
+## Trip Details (extracted from the query)
+
+{trip_details}
 
 ## User's Travel Query
 
@@ -114,6 +116,7 @@ async def itinerary_agent(state: TravelState) -> dict:
 
     system_prompt = _build_react_system_prompt(
         destination, query, flight_data, hotel_data, weather_data,
+        format_trip_details(state.get("trip")),
     )
     conversation: list = [
         SystemMessage(content=system_prompt),
@@ -128,18 +131,13 @@ async def itinerary_agent(state: TravelState) -> dict:
         search_fn=_search_itinerary,
         agent_name="itinerary_agent",
         max_iterations=MAX_REACT_ITERATIONS,
-        llm_calls=state.get("llm_calls", 0),
     )
 
-    # ── Build state update ─────────────────────────────────────────────
-    completed = list(set(state.get("completed_agents", []) + ["itinerary_agent"]))
-    pending = [a for a in state.get("pending_agents", []) if a != "itinerary_agent"]
-
+    # State update: deltas only — reducers merge them with parallel agents' writes.
     return {
         "itinerary": final_answer,
         "messages": [AIMessage(content=final_answer)],
         "llm_calls": llm_calls,
-        "errors": state.get("errors", []) + errors,
-        "completed_agents": completed,
-        "pending_agents": pending,
+        "errors": errors,
+        "completed_agents": ["itinerary_agent"],
     }

@@ -36,6 +36,7 @@ def sample_state():
         "messages": [],
         "user_query": "Plan a trip to Tokyo",
         "user_intent": "full_trip",
+        "trip": {"destination": "Tokyo"},
         "extracted_destination": "Tokyo",
         "supervisor_reasoning": "",
         "supervisor_loop_count": 0,

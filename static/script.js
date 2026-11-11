@@ -105,6 +105,54 @@ function hideError() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Clarification — the agent paused to ask for missing trip details
+// ═══════════════════════════════════════════════════════════════════════════
+
+var DEFAULT_PLACEHOLDER = null;
+var DEFAULT_BTN_LABEL = null;
+
+/** Show the agent's question and turn the input into a reply box. */
+function showClarification(question, threadId) {
+    // The reply must go to the SAME thread so the paused run resumes.
+    currentThreadId = threadId;
+    try { localStorage.setItem("navigo_thread_id", currentThreadId); } catch (_) {}
+
+    var box = $("clarifyBox");
+    if (box) {
+        box.textContent = "🧭 " + question;   // textContent: never rendered as HTML
+        box.classList.remove("hidden");
+    }
+
+    var progress = $("progressSection");
+    if (progress) progress.classList.add("hidden");
+
+    var input = $("userInput");
+    if (input) {
+        if (DEFAULT_PLACEHOLDER === null) DEFAULT_PLACEHOLDER = input.placeholder;
+        input.value = "";
+        input.placeholder = "Type your answer…";
+        input.focus();
+    }
+    var label = $("btnLabel");
+    if (label) {
+        if (DEFAULT_BTN_LABEL === null) DEFAULT_BTN_LABEL = label.textContent;
+        label.textContent = "Send Answer";
+    }
+}
+
+function hideClarification() {
+    var box = $("clarifyBox");
+    if (box) {
+        box.classList.add("hidden");
+        box.textContent = "";
+    }
+    var input = $("userInput");
+    if (input && DEFAULT_PLACEHOLDER !== null) input.placeholder = DEFAULT_PLACEHOLDER;
+    var label = $("btnLabel");
+    if (label && DEFAULT_BTN_LABEL !== null) label.textContent = DEFAULT_BTN_LABEL;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Agent Progress
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -220,6 +268,8 @@ function sendMessageStream() {
     }
     activeAbortController = new AbortController();
 
+    hideError();
+    hideClarification();
     setLoading(true);
     showProgressSection();
 
@@ -326,6 +376,11 @@ function sendMessageStream() {
                 console.log("[Navigo] stream complete — thread:", data.thread_id, "llm_calls:", data.llm_calls);
                 break;
 
+            case "clarification":
+                // { thread_id, question, missing } — the run is paused, waiting for a reply
+                showClarification(data.question, data.thread_id);
+                break;
+
             case "error":
                 showError(data.message || "An error occurred.");
                 break;
@@ -354,6 +409,7 @@ function sendMessageLegacy() {
         return;
     }
 
+    hideClarification();
     setLoading(true);
     showProgressSection();
 
@@ -372,6 +428,11 @@ function sendMessageLegacy() {
 
             if (!ok || !data.success) {
                 throw new Error(data.error || "Something went wrong on the server.");
+            }
+
+            if (data.needs_clarification) {
+                showClarification(data.question, data.thread_id);
+                return;
             }
 
             currentThreadId = data.thread_id;

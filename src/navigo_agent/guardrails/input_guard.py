@@ -52,7 +52,12 @@ INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
         re.IGNORECASE,
     )),
     ("role_override", re.compile(
-        r"(you\s+are\s+now|act\s+as\s+(a|an)|pretend\s+you\s+are|you\s+must\s+(obey|follow))",
+        # NB: a bare "act as a ..." is NOT blocked — "act as a local guide" is a
+        # normal travel request. Only persona overrides that drop the rules are.
+        r"(you\s+are\s+now"
+        r"|act\s+as\s+(a|an)\s+(unrestricted|unfiltered|uncensored|jailbroken|evil)"
+        r"|act\s+as\s+if\s+you\s+ha(ve|d)\s+no\s+(rules?|restrictions?|guidelines?|limits?)"
+        r"|pretend\s+you\s+are|you\s+must\s+(obey|follow))",
         re.IGNORECASE,
     )),
     ("dan_jailbreak", re.compile(
@@ -64,10 +69,6 @@ INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
     )),
     ("prompt_leak", re.compile(
         r"(reveal|show|print|display|tell\s+me)\s+(your\s+)?(system\s+)?(prompt|instructions?|rules?)",
-        re.IGNORECASE,
-    )),
-    ("output_format_hijack", re.compile(
-        r"(respond\s+only\s+with|output\s+in\s+JSON|format\s+your\s+response)",
         re.IGNORECASE,
     )),
 ]
