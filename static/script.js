@@ -14,7 +14,13 @@ console.log("[Navigo] script.js loaded — binding events…");
 // State
 // ═══════════════════════════════════════════════════════════════════════════
 
-let currentThreadId = localStorage.getItem("navigo_thread_id") || null;
+// Thread of the current conversation. Sent with every request:
+//   - paused on a question → the server resumes it with our answer
+//   - finished turn        → the server treats the next message as a follow-up
+// Deliberately NOT restored on page load: a reload starts a new conversation,
+// since the plan being followed up on is no longer on screen.
+let currentThreadId = null;
+try { localStorage.removeItem("navigo_thread_id"); } catch (_) {}
 let latestAnswerMarkdown = "";
 let activeAbortController = null;
 
@@ -110,12 +116,35 @@ function hideError() {
 
 var DEFAULT_PLACEHOLDER = null;
 var DEFAULT_BTN_LABEL = null;
+var isClarifying = false;     // the agent asked a question and waits for the answer
+var isFollowUpMode = false;   // a plan is on screen; the next message refines it
+
+/** Set the input placeholder + button label for the current mode. */
+function applyInputMode() {
+    var input = $("userInput");
+    var label = $("btnLabel");
+    if (input && DEFAULT_PLACEHOLDER === null) DEFAULT_PLACEHOLDER = input.placeholder;
+    if (label && DEFAULT_BTN_LABEL === null) DEFAULT_BTN_LABEL = label.textContent;
+
+    var placeholder = DEFAULT_PLACEHOLDER, text = DEFAULT_BTN_LABEL;
+    if (isClarifying) {
+        placeholder = "Type your answer…";
+        text = "Send Answer";
+    } else if (isFollowUpMode) {
+        placeholder = "Ask a follow-up or change the plan — e.g. make it cheaper, add 2 days, what about hotels near the station?";
+        text = "Update Plan";
+    }
+    if (input) input.placeholder = placeholder;
+    if (label) label.textContent = text;
+
+    var bar = $("followUpBar");
+    if (bar) bar.classList.toggle("hidden", !isFollowUpMode || isClarifying);
+}
 
 /** Show the agent's question and turn the input into a reply box. */
 function showClarification(question, threadId) {
     // The reply must go to the SAME thread so the paused run resumes.
     currentThreadId = threadId;
-    try { localStorage.setItem("navigo_thread_id", currentThreadId); } catch (_) {}
 
     var box = $("clarifyBox");
     if (box) {
@@ -126,17 +155,12 @@ function showClarification(question, threadId) {
     var progress = $("progressSection");
     if (progress) progress.classList.add("hidden");
 
+    isClarifying = true;
+    applyInputMode();
     var input = $("userInput");
     if (input) {
-        if (DEFAULT_PLACEHOLDER === null) DEFAULT_PLACEHOLDER = input.placeholder;
         input.value = "";
-        input.placeholder = "Type your answer…";
         input.focus();
-    }
-    var label = $("btnLabel");
-    if (label) {
-        if (DEFAULT_BTN_LABEL === null) DEFAULT_BTN_LABEL = label.textContent;
-        label.textContent = "Send Answer";
     }
 }
 
@@ -146,10 +170,39 @@ function hideClarification() {
         box.classList.add("hidden");
         box.textContent = "";
     }
+    isClarifying = false;
+    applyInputMode();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Conversation — follow-ups on the current plan, or start over
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** A plan was delivered: the next message continues this conversation. */
+function enterFollowUpMode(threadId) {
+    currentThreadId = threadId;
+    isFollowUpMode = true;
+    applyInputMode();
     var input = $("userInput");
-    if (input && DEFAULT_PLACEHOLDER !== null) input.placeholder = DEFAULT_PLACEHOLDER;
-    var label = $("btnLabel");
-    if (label && DEFAULT_BTN_LABEL !== null) label.textContent = DEFAULT_BTN_LABEL;
+    if (input) input.value = "";
+}
+
+/** Forget the current conversation — the next message is an independent request. */
+function startNewTrip() {
+    if (activeAbortController) activeAbortController.abort();
+    currentThreadId = null;
+    isFollowUpMode = false;
+    hideClarification();   // also re-applies the input mode
+    hideError();
+    ["resultSection", "progressSection"].forEach(function (id) {
+        var el = $(id);
+        if (el) el.classList.add("hidden");
+    });
+    var input = $("userInput");
+    if (input) {
+        input.value = "";
+        input.focus();
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -381,9 +434,8 @@ function sendMessageStream() {
 
             case "complete":
                 // { thread_id, answer, flight_results, hotel_results, weather_results, itinerary, llm_calls }
-                currentThreadId = data.thread_id;
-                try { localStorage.setItem("navigo_thread_id", currentThreadId); } catch (_) {}
                 showResult(data.answer, data.thread_id, data);
+                enterFollowUpMode(data.thread_id);
                 console.log("[Navigo] stream complete — thread:", data.thread_id, "llm_calls:", data.llm_calls);
                 break;
 
@@ -447,7 +499,6 @@ function sendMessageLegacy() {
             }
 
             currentThreadId = data.thread_id;
-            try { localStorage.setItem("navigo_thread_id", currentThreadId); } catch (_) {}
 
             updateProgressItem("intent_classifier", "Done ✅");
             updateProgressItem("supervisor", "Done ✅");
@@ -467,6 +518,7 @@ function sendMessageLegacy() {
             if (summary) summary.textContent = agentsRan.length + " agents completed";
 
             showResult(data.answer, data.thread_id, data);
+            enterFollowUpMode(data.thread_id);
             console.log("[Navigo] request successful — thread:", data.thread_id);
         })
         .catch(function (err) {
@@ -573,10 +625,16 @@ function downloadPDF() {
     console.log("[Navigo]   found " + chips.length + " quick-prompt chip(s)");
     chips.forEach(function (btn, i) {
         btn.addEventListener("click", function () {
+            // A quick prompt is a brand-new request, never a follow-up.
+            startNewTrip();
             setPrompt(this.getAttribute("data-prompt"));
         });
         console.log("[Navigo]   ✓ chip[" + i + "] bound: " + (btn.getAttribute("data-prompt") || "").slice(0, 40) + "…");
     });
+
+    // 2b. "New trip" — leave the current conversation
+    var newTripBtn = $("newTripBtn");
+    if (newTripBtn) newTripBtn.addEventListener("click", startNewTrip);
 
     // 3. Copy button
     var copyBtn = $("copyBtn");

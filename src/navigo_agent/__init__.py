@@ -36,8 +36,9 @@ async def run_travel_agent(
         user_input: Natural language travel request — or, when `thread_id`
                     refers to a run paused on a clarification question, the
                     user's reply to that question.
-        thread_id: Thread returned by a previous call. Only used to resume a
-                   paused run; finished threads are never reused.
+        thread_id: Thread returned by a previous call. A paused thread is
+                   resumed; a finished one makes this message a follow-up
+                   of that conversation (run on a new thread).
         allow_clarification: False → never pause to ask the user (batch/eval).
 
     Returns:
@@ -81,6 +82,7 @@ async def run_travel_agent(
         "thread_id": plan.thread_id,
         "answer": final_answer,
         "needs_clarification": False,
+        "follow_up": bool(result.get("history")),
         "question": None,
         "missing": [],
         "flight_results": result.get("flight_results", ""),

@@ -37,6 +37,11 @@ class TravelState(TypedDict):
     # ── Intent & Routing ──────────────────────────────────────────
     user_intent: str  # flight | hotel | weather | itinerary | full_trip | general
     trip: dict[str, Any]  # structured slots (see graph/slots.py: TripSlots)
+    # Multi-turn: earlier turns of this conversation, oldest first:
+    #   [{"user": "<request>", "assistant": "<final answer, truncated>"}]
+    # Seeded from the previous turn's thread; emptied if this message starts a new topic.
+    history: list[dict[str, str]]
+    previous_trip: dict[str, Any]  # slots of the previous turn (carried into follow-ups)
     extracted_destination: str | None  # == trip["destination"], kept for convenience
     allow_clarification: bool  # False → never pause to ask the user (batch / eval runs)
     supervisor_reasoning: str  # explainability: why this routing decision
@@ -57,13 +62,21 @@ class TravelState(TypedDict):
     errors: Annotated[list[str], operator.add]
 
 
-def build_initial_state(user_input: str, *, allow_clarification: bool = True) -> dict:
+def build_initial_state(
+    user_input: str,
+    *,
+    allow_clarification: bool = True,
+    history: list[dict[str, str]] | None = None,
+    previous_trip: dict | None = None,
+) -> dict:
     """Fresh input state for one graph run (shared by invoke + streaming paths)."""
     return {
         "messages": [HumanMessage(content=user_input)],
         "user_query": user_input,
         "user_intent": "",
         "trip": {},
+        "history": list(history or []),
+        "previous_trip": dict(previous_trip or {}),
         "extracted_destination": None,
         "allow_clarification": allow_clarification,
         "supervisor_reasoning": "",

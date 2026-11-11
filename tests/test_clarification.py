@@ -5,20 +5,9 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from langchain_core.messages import AIMessage
-from langgraph.checkpoint.memory import MemorySaver
 
 import navigo_agent
-import navigo_agent.graph.agents.final as final_mod
-import navigo_agent.graph.agents.flight as flight_mod
-import navigo_agent.graph.agents.hotel as hotel_mod
-import navigo_agent.graph.agents.itinerary as itinerary_mod
-import navigo_agent.graph.agents.weather as weather_mod
-import navigo_agent.graph.builder as builder_mod
-import navigo_agent.graph.routing as routing_mod
-import navigo_agent.graph.supervisor as supervisor_mod
 from navigo_agent import streaming
-from navigo_agent.graph.builder import build_travel_graph
 from navigo_agent.graph.slots import (
     TripSlots,
     build_clarification_question,
@@ -70,64 +59,6 @@ class TestMissingRequiredSlots:
         assert merged["interests"] == ["food"]
         assert merged["destination"] == "Tokyo"
         assert merged["duration_days"] == 5
-
-
-# ── End-to-end through the real graph ─────────────────────────────────
-
-class _SupervisorLLM:
-    def __init__(self):
-        self.calls = 0
-
-    async def ainvoke(self, _messages):
-        self.calls += 1
-        agents = ["flight_agent", "hotel_agent", "weather_agent"] if self.calls == 1 else []
-        return AIMessage(content=json.dumps({
-            "reasoning": "scripted", "next_action": "x",
-            "agents_to_dispatch": agents, "is_complete": not agents,
-        }))
-
-
-class _FinalLLM:
-    async def ainvoke(self, _messages):
-        return AIMessage(content="FINAL PLAN")
-
-
-def _fake_react(answer):
-    async def _run(**_kwargs):
-        return answer, 1, []
-
-    return _run
-
-
-@pytest.fixture
-def graph_env():
-    """Real graph + in-memory checkpointer; LLMs/tools mocked.
-
-    `extract` is the trip extractor mock — set its side_effect per test.
-    """
-    extract = AsyncMock()
-    weather = AsyncMock(return_value="sunny")
-    saved = builder_mod._compiled_graph
-    with (
-        patch.object(routing_mod, "extract_trip_request", extract),
-        patch.object(supervisor_mod, "get_llm", lambda **_: _SupervisorLLM()),
-        patch.object(final_mod, "get_llm", lambda **_: _FinalLLM()),
-        patch.object(flight_mod, "get_llm", lambda **_: None),
-        patch.object(hotel_mod, "get_llm", lambda **_: None),
-        patch.object(itinerary_mod, "get_llm", lambda **_: None),
-        patch.object(flight_mod, "run_react_loop", _fake_react("FLIGHTS")),
-        patch.object(hotel_mod, "run_react_loop", _fake_react("HOTELS")),
-        patch.object(itinerary_mod, "run_react_loop", _fake_react("ITINERARY")),
-        patch.object(weather_mod, "weather_mcp_search", weather),
-        patch.object(weather_mod, "forecast_mcp_search", AsyncMock(return_value="mild")),
-    ):
-        graph = build_travel_graph().compile(checkpointer=MemorySaver())
-        builder_mod._compiled_graph = graph
-        with patch.object(streaming, "get_compiled_graph", lambda: graph):
-            try:
-                yield {"graph": graph, "extract": extract, "weather": weather}
-            finally:
-                builder_mod._compiled_graph = saved
 
 
 def _parse_sse(chunks):
@@ -195,12 +126,14 @@ class TestClarificationFlow:
         assert second["answer"] == "FINAL PLAN"
 
     @pytest.mark.asyncio
-    async def test_finished_thread_is_not_reused(self, graph_env):
+    async def test_finished_thread_is_not_rerun(self, graph_env):
+        """A follow-up runs on a NEW thread — counters never carry over."""
         graph_env["extract"].return_value = ("weather", TripSlots(destination="Tokyo"))
+        graph_env["follow"].return_value = ("weather", TripSlots(), True)
         first = await navigo_agent.run_travel_agent("Weather in Tokyo?")
-        second = await navigo_agent.run_travel_agent("Weather in Tokyo?", thread_id=first["thread_id"])
+        second = await navigo_agent.run_travel_agent("And tomorrow?", thread_id=first["thread_id"])
         assert second["thread_id"] != first["thread_id"]
-        assert second["llm_calls"] == first["llm_calls"]  # no carry-over between runs
+        assert second["llm_calls"] == first["llm_calls"]
 
     @pytest.mark.asyncio
     async def test_unknown_thread_id_starts_new_run(self, graph_env):

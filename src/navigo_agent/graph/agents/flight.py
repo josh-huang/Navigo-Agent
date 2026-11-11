@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from navigo_agent.config import get_llm
 from navigo_agent.graph.agents.react_utils import run_react_loop
-from navigo_agent.graph.slots import TripSlots, format_trip_details
+from navigo_agent.graph.slots import TripSlots, conversation_block, format_trip_details
 from navigo_agent.mcp import extract_mcp_text, tavily_mcp_search
 from navigo_agent.state import TravelState
 
@@ -97,7 +97,7 @@ async def flight_agent(state: TravelState) -> dict:
     system_prompt = _build_react_system_prompt(route, query, format_trip_details(state.get("trip")))
     conversation: list = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=f"Find flight information for: {query}"),
+        HumanMessage(content=f"Find flight information for: {query}{conversation_block(state.get('history'))}"),
     ]
 
     llm = get_llm(temperature=0.2)

@@ -5,7 +5,7 @@ import logging
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from navigo_agent.config import get_llm
-from navigo_agent.graph.slots import format_trip_details
+from navigo_agent.graph.slots import conversation_block, format_trip_details
 from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
@@ -60,12 +60,20 @@ def build_final_prompt(state: TravelState) -> str:
         data = "\n".join(f"{label}: {value}" for label, value in data_blocks if value)
         data = data or "No data was gathered for this request."
 
+    # Follow-up: show the previous answer at length so it is revised, not restarted.
+    follow_up = conversation_block(state.get("history"), answer_chars=1500)
+    if follow_up:
+        follow_up += (
+            "\n\nThis is a follow-up. Apply what the user asked to change, keep what still "
+            "holds from the previous answer, and briefly say what changed."
+        )
+
     return f"""
 {"Generate a final travel plan" if is_trip else "Answer the user's travel question"} based on the following information:
 User Query: {state['user_query']}
 Trip Details:
 {format_trip_details(state.get('trip'))}
-{data}
+{data}{follow_up}
 
 {FULL_PLAN_INSTRUCTIONS if is_trip else FOCUSED_INSTRUCTIONS}
 """
