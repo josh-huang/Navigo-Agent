@@ -72,12 +72,13 @@ def get_llm(
 
 
 def get_checkpointer_dsn() -> str:
-    """Return the PostgreSQL connection string with sslmode=require enforced."""
+    """Return the PostgreSQL connection string.
+
+    The DSN is used as given. libpq's default (sslmode=prefer) negotiates TLS
+    with servers that offer it (e.g. Render) and still works against a local
+    Postgres without SSL (e.g. docker compose). To force TLS, put
+    `?sslmode=require` in DATABASE_URL.
+    """
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL is missing. Add your Render PostgreSQL URL to .env.")
-
-    dsn = DATABASE_URL
-    if "sslmode=" not in dsn:
-        separator = "&" if "?" in dsn else "?"
-        dsn = f"{dsn}{separator}sslmode=require"
-    return dsn
+    return DATABASE_URL

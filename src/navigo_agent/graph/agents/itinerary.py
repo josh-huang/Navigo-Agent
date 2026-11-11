@@ -139,7 +139,7 @@ async def itinerary_agent(state: TravelState) -> dict:
         "itinerary": final_answer,
         "messages": [AIMessage(content=final_answer)],
         "llm_calls": llm_calls,
-        "errors": state.get("errors", []) + errors,
+        "errors": errors,  # reducer (operator.add) appends — return only new errors
         "completed_agents": completed,
         "pending_agents": pending,
     }

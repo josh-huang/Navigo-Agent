@@ -22,6 +22,7 @@ from collections.abc import AsyncGenerator
 from langchain_core.messages import HumanMessage
 
 from navigo_agent.graph.builder import get_compiled_graph
+from navigo_agent.guardrails import guard_output
 
 logger = logging.getLogger(__name__)
 
@@ -118,13 +119,13 @@ async def stream_travel_plan(
                 if isinstance(output, dict):
                     result_data = {}
                     if name == "flight_agent" and output.get("flight_results"):
-                        result_data["flight_results"] = output["flight_results"][:500]
+                        result_data["flight_results"] = guard_output(output["flight_results"][:500])
                     elif name == "hotel_agent" and output.get("hotel_results"):
-                        result_data["hotel_results"] = output["hotel_results"][:500]
+                        result_data["hotel_results"] = guard_output(output["hotel_results"][:500])
                     elif name == "weather_agent" and output.get("weather_results"):
-                        result_data["weather_results"] = output["weather_results"][:500]
+                        result_data["weather_results"] = guard_output(output["weather_results"][:500])
                     elif name == "itinerary_agent" and output.get("itinerary"):
-                        result_data["itinerary"] = output["itinerary"][:500]
+                        result_data["itinerary"] = guard_output(output["itinerary"][:500])
 
                     if result_data:
                         yield _sse_event("agent_result", result_data)
@@ -142,13 +143,14 @@ async def stream_travel_plan(
                         elif isinstance(last_msg, dict):
                             final_answer = last_msg.get("content", "")
 
+                    # Same output guard as the non-streaming endpoint
                     yield _sse_event("complete", {
                         "thread_id": thread_id,
-                        "answer": final_answer,
-                        "flight_results": output.get("flight_results", ""),
-                        "hotel_results": output.get("hotel_results", ""),
-                        "weather_results": output.get("weather_results", ""),
-                        "itinerary": output.get("itinerary", ""),
+                        "answer": guard_output(final_answer),
+                        "flight_results": guard_output(output.get("flight_results", "")),
+                        "hotel_results": guard_output(output.get("hotel_results", "")),
+                        "weather_results": guard_output(output.get("weather_results", "")),
+                        "itinerary": guard_output(output.get("itinerary", "")),
                         "llm_calls": output.get("llm_calls", 0),
                     })
 

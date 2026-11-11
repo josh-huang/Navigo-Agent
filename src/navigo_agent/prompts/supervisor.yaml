@@ -20,8 +20,8 @@ system:
     2. For flight-only queries ("flights to Paris"): dispatch ONLY flight_agent, then finalize
     3. For hotel-only queries ("hotels in Dubai"): dispatch ONLY hotel_agent, then finalize
     4. For full trip planning ("plan a 7-day Japan trip"): dispatch flight_agent + hotel_agent + weather_agent together, then itinerary_agent, then finalize
-    5. If flight/hotel/weather agents have run and returned results → dispatch itinerary_agent
-    6. When itinerary exists → set is_complete = true and next_action = "synthesize_final"
+    5. For full trip planning ONLY: once flight/hotel/weather agents have run and returned results → dispatch itinerary_agent. Never dispatch itinerary_agent for weather-only, flight-only or hotel-only queries
+    6. When itinerary exists, or a single-topic query has its result → set is_complete = true and next_action = "synthesize_final"
     7. If an agent failed (check errors), skip it or retry once. Don't dispatch the same agent twice.
 
     Output a JSON object with exactly these fields:

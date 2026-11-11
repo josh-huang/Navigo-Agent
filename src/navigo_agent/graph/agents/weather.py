@@ -25,10 +25,16 @@ async def weather_agent(state: TravelState) -> dict:
     Returns a state update with weather_results, extracted_destination for reuse,
     and completed/pending agent tracking.
     """
-    city = state.get("extracted_destination") or extract_destination(state["user_query"])
-    logger.info("Weather agent: fetching weather for '%s'", city)
+    # Always leave the pending list, on success *and* failure — otherwise the
+    # router keeps sending the graph back here until the recursion limit.
+    completed = list(set(state.get("completed_agents", []) + ["weather_agent"]))
+    pending = [a for a in state.get("pending_agents", []) if a != "weather_agent"]
+    city = state.get("extracted_destination")
 
     try:
+        if not city:
+            city = extract_destination(state["user_query"])
+        logger.info("Weather agent: fetching weather for '%s'", city)
         weather_data = await weather_mcp_search(city)
         forecast_data = await forecast_mcp_search(city)
         # Unwrap MCP content-block format → plain text
@@ -49,12 +55,9 @@ Forecast:
             "messages": [AIMessage(content="Weather check encountered an error.")],
             "llm_calls": state.get("llm_calls", 0),
             "errors": [f"weather_agent: {e!s}"],
-            "completed_agents": list(set(state.get("completed_agents", []) + ["weather_agent"])),
+            "completed_agents": completed,
+            "pending_agents": pending,
         }
-
-    # Success path: remove self from pending, add to completed
-    completed = list(set(state.get("completed_agents", []) + ["weather_agent"]))
-    pending = [a for a in state.get("pending_agents", []) if a != "weather_agent"]
 
     return {
         "weather_results": weather_text,

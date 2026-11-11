@@ -29,6 +29,9 @@ INTENT_PATTERNS: list[tuple[str, re.Pattern]] = [
     )),
 ]
 
+# Intents for which an itinerary is generated automatically once data is in
+ITINERARY_INTENTS = frozenset({"full_trip", "itinerary"})
+
 TRIP_PLANNING_KEYWORDS = [
     "plan", "trip", "travel", "visit", "vacation", "holiday",
     "itinerary", "tour", "days", "week", "budget",
@@ -163,7 +166,12 @@ def route_after_supervisor(state: TravelState) -> str:
         logger.info("Routing to next pending agent: %s", next_agent)
         return next_agent
 
-    # No valid pending agents — check if itinerary should run
+    # No valid pending agents. Only trip-planning intents get an automatic
+    # itinerary; single-topic queries (weather / flights / hotel) go straight
+    # to the final answer unless the supervisor explicitly dispatched it.
+    if state.get("user_intent") not in ITINERARY_INTENTS:
+        return "final_synthesizer"
+
     has_data = bool(state.get("flight_results") or state.get("hotel_results") or state.get("weather_results"))
     has_itinerary = bool(state.get("itinerary"))
     completed = state.get("completed_agents", [])
