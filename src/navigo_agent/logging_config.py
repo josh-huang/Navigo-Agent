@@ -25,7 +25,10 @@ class StructuredFormatter(logging.Formatter):
             log_entry["exception"] = str(record.exc_info[1])
 
         # Include extra fields if passed via extra={...}
-        for key in ("thread_id", "agent_name", "phase", "llm_calls"):
+        for key in (
+            "thread_id", "agent_name", "phase", "llm_calls",
+            "outcome", "intent", "agents", "errors", "duration_ms",
+        ):
             if hasattr(record, key):
                 log_entry[key] = getattr(record, key)
 

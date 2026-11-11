@@ -16,11 +16,12 @@ Usage (in FastAPI route):
 
 import json
 import logging
+import time
 from collections.abc import AsyncGenerator
 
 from navigo_agent.graph.builder import get_compiled_graph
 from navigo_agent.guardrails import guard_output
-from navigo_agent.session import pending_clarification, plan_run
+from navigo_agent.session import log_run_summary, pending_clarification, plan_run
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,8 @@ async def stream_travel_plan(
 
     running: set[str] = set()  # nodes currently executing (several at once when parallel)
     complete_payload: dict | None = None
+    final_state: dict | None = None
+    started = time.perf_counter()
     answer = AnswerStreamer()
 
     try:
@@ -194,6 +197,7 @@ async def stream_travel_plan(
             if kind == "on_chain_end" and name == "LangGraph":
                 output = event.get("data", {}).get("output", {})
                 if isinstance(output, dict):
+                    final_state = output
                     messages = output.get("messages", [])
                     final_answer = ""
                     if messages:
@@ -218,6 +222,10 @@ async def stream_travel_plan(
                     }
 
         clarification = await pending_clarification(graph, config)
+        log_run_summary(
+            thread_id, final_state, started,
+            outcome="awaiting_clarification" if clarification else "completed",
+        )
         if clarification:
             yield _sse_event("clarification", {"thread_id": thread_id, **clarification})
         elif complete_payload is not None:
@@ -225,6 +233,7 @@ async def stream_travel_plan(
 
     except Exception:
         logger.exception("Streaming graph execution failed for thread %s", thread_id)
+        log_run_summary(thread_id, final_state, started, outcome="failed")
         yield _sse_event("error", {
             "message": "An error occurred while generating your travel plan. Please try again.",
             "thread_id": thread_id,
