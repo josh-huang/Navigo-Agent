@@ -49,7 +49,7 @@ User → FastAPI → Input Guard → LangGraph StateGraph
 ```
 Navigo-Agent/
 ├── app.py                         # FastAPI entry point, API routes
-├── dockerfile                     # Multi-stage Docker build (Python 3.13-slim)
+├── dockerfile                     # Multi-stage Docker build (Python 3.14-slim)
 ├── docker-compose.yml             # Local dev: app + PostgreSQL
 ├── pyproject.toml                 # Project metadata & dependencies (uv)
 ├── uv.lock                        # Locked dependency versions
