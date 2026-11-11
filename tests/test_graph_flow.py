@@ -281,11 +281,11 @@ class TestParallelDispatch:
         assert visited.count("supervisor") == 2
         assert supervisor.calls == 2
         assert visited == [
-            "intent_classifier", "clarify", "supervisor",
-            *visited[3:6],
+            "intent_classifier", "prepare_clarification", "clarify", "supervisor",
+            *visited[4:7],
             "supervisor", "itinerary_agent", "final_synthesizer",
         ]
-        assert sorted(visited[3:6]) == ["flight_agent", "hotel_agent", "weather_agent"]
+        assert sorted(visited[4:7]) == ["flight_agent", "hotel_agent", "weather_agent"]
 
     @pytest.mark.asyncio
     async def test_parallel_writes_are_merged(self):

@@ -41,9 +41,10 @@ class TripSlots(BaseModel):
     travelers: int | None = None
     budget: str | None = Field(default=None, description="Free text: 'budget', 'mid-range', '$2000'")
     interests: list[str] = Field(default_factory=list)
+    language: str | None = Field(default=None, description="Language the user wrote in, e.g. 'English'")
 
     @field_validator(
-        "origin", "destination", "destination_city", "start_date", "end_date", "budget",
+        "origin", "destination", "destination_city", "start_date", "end_date", "budget", "language",
         mode="before",
     )
     @classmethod
@@ -94,7 +95,8 @@ Return ONLY a JSON object with exactly these fields (use null when the user did 
   "duration_days": <integer or null>,
   "travelers": <integer or null>,
   "budget": "<the user's budget wording, e.g. 'budget', 'mid-range', 'luxury', '$2000', or null>",
-  "interests": ["<interest>", ...]
+  "interests": ["<interest>", ...],
+  "language": "<English name of the language the user wrote in, e.g. English, Chinese, Spanish>"
 }}
 
 Intent meanings:
@@ -260,6 +262,8 @@ def format_trip_details(trip: dict | None) -> str:
         ("Interests", ", ".join(slots.interests) or None),
     ]
     lines += [f"- {label}: {value}" for label, value in labelled if value]
+    if slots.language:
+        lines.append(f"- User's language: {slots.language}")
     missing = [label for label, value in labelled[:3] if not value]
     if missing:
         lines.append(
@@ -319,3 +323,40 @@ def merge_slots(base: dict | None, update: TripSlots) -> dict:
         if value not in (None, [], ""):
             merged[key] = value
     return merged
+
+
+def is_english(language: str | None) -> bool:
+    """True when no translation is needed (unknown language counts as English)."""
+    return not language or language.strip().lower() in {"english", "en"}
+
+
+async def localise_question(question: str, language: str | None) -> str:
+    """Translate a clarification question into the user's language.
+
+    One small LLM call, made only when the user did not write in English.
+    Falls back to the English question on any failure.
+    """
+    if is_english(language):
+        return question
+    try:
+        llm = get_llm(temperature=0.0, max_tokens=300)
+        response = await llm.ainvoke([
+            SystemMessage(content=(
+                f"Translate the user's message into {language}. Keep the meaning, the line breaks "
+                "and the bullet points. Output ONLY the translation."
+            )),
+            HumanMessage(content=question),
+        ])
+        translated = str(response.content).strip()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Could not translate clarification question to %s: %s", language, e)
+        return question
+    return translated or question
+
+
+def reply_language_instruction(trip: dict | None) -> str:
+    """Prompt line telling the model which language to answer in."""
+    language = TripSlots(**(trip or {})).language
+    if is_english(language):
+        return "Write the answer in the same language as the user's query."
+    return f"Write the entire answer in {language} — the user wrote in {language}."

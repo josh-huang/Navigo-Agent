@@ -29,6 +29,7 @@ from navigo_agent.graph.routing import (
     PARALLEL_AGENTS,
     clarify_node,
     intent_classifier,
+    prepare_clarification,
     route_after_supervisor,
 )
 from navigo_agent.graph.supervisor import supervisor_node
@@ -49,6 +50,7 @@ def build_travel_graph() -> StateGraph:
 
     # ── Add nodes ────────────────────────────────────────────────────
     graph.add_node("intent_classifier", intent_classifier)
+    graph.add_node("prepare_clarification", prepare_clarification)
     graph.add_node("clarify", clarify_node)
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("flight_agent", flight_agent)
@@ -62,7 +64,8 @@ def build_travel_graph() -> StateGraph:
     graph.add_edge(START, "intent_classifier")
 
     # Intent + slots → clarify (interrupts if essentials are missing) → Supervisor
-    graph.add_edge("intent_classifier", "clarify")
+    graph.add_edge("intent_classifier", "prepare_clarification")
+    graph.add_edge("prepare_clarification", "clarify")
     graph.add_edge("clarify", "supervisor")
 
     # Supervisor → Conditional: one node, or a list of nodes to run in parallel

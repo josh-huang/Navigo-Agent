@@ -44,6 +44,7 @@ class TravelState(TypedDict):
     previous_trip: dict[str, Any]  # slots of the previous turn (carried into follow-ups)
     extracted_destination: str | None  # == trip["destination"], kept for convenience
     allow_clarification: bool  # False → never pause to ask the user (batch / eval runs)
+    clarification_question: str  # the question to ask, already in the user's language
     supervisor_reasoning: str  # explainability: why this routing decision
     supervisor_loop_count: int  # safety bound, max 3
 
@@ -79,6 +80,7 @@ def build_initial_state(
         "previous_trip": dict(previous_trip or {}),
         "extracted_destination": None,
         "allow_clarification": allow_clarification,
+        "clarification_question": "",
         "supervisor_reasoning": "",
         "supervisor_loop_count": 0,
         "flight_results": "",

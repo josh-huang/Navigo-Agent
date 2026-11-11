@@ -5,7 +5,11 @@ import logging
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from navigo_agent.config import get_llm
-from navigo_agent.graph.slots import conversation_block, format_trip_details
+from navigo_agent.graph.slots import (
+    conversation_block,
+    format_trip_details,
+    reply_language_instruction,
+)
 from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
@@ -76,6 +80,7 @@ Trip Details:
 {data}{follow_up}
 
 {FULL_PLAN_INSTRUCTIONS if is_trip else FOCUSED_INSTRUCTIONS}
+- {reply_language_instruction(state.get('trip'))}
 """
 
 

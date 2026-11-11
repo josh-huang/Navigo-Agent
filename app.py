@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field
 from navigo_agent import run_travel_agent, setup_middleware
 from navigo_agent.graph.builder import close_checkpointer, init_checkpointer
 from navigo_agent.guardrails import guard_input, guard_output
+from navigo_agent.logging_config import configure_logging_from_env
+from navigo_agent.middleware import travel_rate_limit
 from navigo_agent.streaming import stream_travel_plan
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,6 +34,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Open the checkpointer (Postgres pool) at startup, close it at shutdown."""
+    configure_logging_from_env()
     await init_checkpointer()
     try:
         yield
@@ -69,6 +72,7 @@ async def home(request: Request):
 
 
 @app.post("/api/travel")
+@travel_rate_limit
 async def travel_planner(request: Request, request_data: TravelRequest):
     """Main endpoint: submit a travel planning request.
 
@@ -149,6 +153,7 @@ async def travel_planner(request: Request, request_data: TravelRequest):
 
 
 @app.post("/api/travel/stream")
+@travel_rate_limit
 async def travel_planner_stream(request: Request, request_data: TravelRequest):
     """Streaming endpoint: submit a travel request and receive SSE progress.
 
