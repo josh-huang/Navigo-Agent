@@ -84,3 +84,66 @@ async def test_stream_error_event_hides_details():
     (event, data), = _parse_sse(chunks)
     assert event == "error"
     assert "SECRET_DB_PASSWORD" not in data["message"]
+
+
+# ── Live answer streaming ─────────────────────────────────────────────
+
+class TestAnswerStreamer:
+    def test_buffers_until_a_line_is_complete(self):
+        streamer = streaming.AnswerStreamer()
+        assert streamer.feed("## Trip ") is None
+        assert streamer.feed("Summary") is None
+        assert streamer.started is False
+        assert streamer.feed("\n\nDay 1: Shin") == "## Trip Summary\n\n"
+        assert streamer.started is True
+        assert streamer.feed("juku\n") == "Day 1: Shinjuku\n"
+        assert streamer.flush() is None
+
+    def test_flush_returns_last_line_without_newline(self):
+        streamer = streaming.AnswerStreamer()
+        streamer.feed("line one\nlast line")
+        assert streamer.flush() == "last line"
+        assert streamer.flush() is None
+
+    def test_secret_split_across_tokens_is_redacted(self):
+        """Token-level guarding would miss this; line-level catches it."""
+        streamer = streaming.AnswerStreamer()
+        half = len(FAKE_KEY) // 2
+        assert streamer.feed("key: " + FAKE_KEY[:half]) is None
+        out = streamer.feed(FAKE_KEY[half:] + "\n")
+        assert FAKE_KEY not in out
+        assert out == "key: [REDACTED:GROQ_KEY]\n"
+
+    def test_chunk_text_handles_block_lists_and_garbage(self):
+        assert streaming._chunk_text(AIMessage(content="abc")) == "abc"
+        assert streaming._chunk_text(SimpleNamespace(content=[{"type": "text", "text": "a"}, "b"])) == "ab"
+        assert streaming._chunk_text(None) == ""
+
+
+def _token(text, node="final_synthesizer"):
+    return {"event": "on_chat_model_stream", "name": "ChatGroq",
+            "metadata": {"langgraph_node": node}, "data": {"chunk": AIMessage(content=text)}}
+
+
+@pytest.mark.asyncio
+async def test_stream_emits_answer_deltas_only_for_the_final_answer():
+    events = [
+        _token("internal reasoning\n", node="supervisor"),          # other nodes' tokens stay private
+        _token("search notes\n", node="flight_agent"),
+        {"event": "on_chain_start", "name": "final_synthesizer", "data": {}},
+        _token("## Plan\n"),
+        _token("Day 1: To"),
+        _token("kyo\nDay 2: Kyoto"),
+        {"event": "on_chain_end", "name": "final_synthesizer", "data": {"output": {}}},
+        {"event": "on_chain_end", "name": "LangGraph", "data": {"output": {
+            "messages": [AIMessage(content="## Plan\nDay 1: Tokyo\nDay 2: Kyoto")],
+        }}},
+    ]
+    parsed = await _collect(events)
+    deltas = [d["text"] for e, d in parsed if e == "answer_delta"]
+    assert deltas == ["## Plan\n", "Day 1: Tokyo\n", "Day 2: Kyoto"]
+    assert "".join(deltas) == dict(parsed)["complete"]["answer"]
+
+    # The tail is flushed before the node is reported complete
+    order = [(e, d.get("status")) for e, d in parsed if e in {"answer_delta", "progress"}]
+    assert order[-2:] == [("answer_delta", None), ("progress", "completed")]

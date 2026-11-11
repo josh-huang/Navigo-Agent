@@ -35,11 +35,9 @@ dependencies = [
     "uvicorn>=0.48",
     "jinja2>=3.1",
     "mcp>=1.28",
-    "aviationstack-mcp>=1.6.0",
     "starlette<1.6.0",
     "bleach>=6.4.0",
     "slowapi>=0.1.10",
-    "pyyaml>=6.0",
 ]
 
 [dependency-groups]

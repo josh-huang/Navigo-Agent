@@ -284,8 +284,38 @@ function showResult(answer, threadId, data) {
     if (weatherData) weatherData.textContent = data.weather_results || "No weather data available.";
 
     if (section) {
+        // Already on screen (and scrolled to) if the answer was streamed live.
+        var wasHidden = section.classList.contains("hidden");
         section.classList.remove("hidden");
-        section.scrollIntoView({ behavior: "smooth", block: "start" });
+        if (wasHidden) section.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+}
+
+// ── Live answer: render the plan while it is being written ─────────────────
+
+var streamedAnswer = "";
+
+function resetStreamedAnswer() {
+    streamedAnswer = "";
+}
+
+/** Append streamed text and re-render. The `complete` event replaces it all. */
+function appendAnswerDelta(text) {
+    if (!text) return;
+    var isFirst = streamedAnswer === "";
+    streamedAnswer += text;
+
+    var resultBox = $("resultBox");
+    if (resultBox) resultBox.innerHTML = renderMarkdown(streamedAnswer);
+
+    if (isFirst) {
+        var threadInfo = $("threadInfo");
+        if (threadInfo) threadInfo.textContent = "Writing your plan…";
+        var section = $("resultSection");
+        if (section) {
+            section.classList.remove("hidden");
+            section.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
     }
 }
 
@@ -322,6 +352,7 @@ function sendMessageStream() {
 
     hideError();
     hideClarification();
+    resetStreamedAnswer();
     setLoading(true);
     showProgressSection();
 
@@ -430,6 +461,11 @@ function sendMessageStream() {
                     var wd = $("weatherData");
                     if (wd) wd.textContent = data.weather_results;
                 }
+                break;
+
+            case "answer_delta":
+                // { text } — the final answer arriving line by line
+                appendAnswerDelta(data.text);
                 break;
 
             case "complete":

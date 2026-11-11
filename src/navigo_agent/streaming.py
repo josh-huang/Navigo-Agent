@@ -46,6 +46,53 @@ AGENT_ICONS = {
 }
 
 
+STREAMED_ANSWER_NODE = "final_synthesizer"
+
+
+def _chunk_text(chunk) -> str:
+    """Text of a streamed chat-model chunk (content may be a list of blocks)."""
+    content = getattr(chunk, "content", "")
+    if isinstance(content, list):
+        content = "".join(
+            block.get("text", "") if isinstance(block, dict) else str(block) for block in content
+        )
+    return content if isinstance(content, str) else ""
+
+
+class AnswerStreamer:
+    """Turns raw LLM tokens into guarded, line-sized `answer_delta` payloads.
+
+    Tokens are buffered until a line is complete and each finished line goes
+    through guard_output() before it leaves the server. Line granularity is
+    what makes the guard meaningful mid-stream: the redaction patterns (API
+    keys, card numbers) never span lines, whereas a single token can split
+    one in half. The `complete` event still carries the fully guarded answer
+    and replaces whatever was streamed.
+    """
+
+    def __init__(self) -> None:
+        self._pending = ""
+        self.started = False
+
+    def feed(self, text: str) -> str | None:
+        """Add tokens; return the newly completed lines (guarded), if any."""
+        self._pending += text
+        cut = self._pending.rfind("\n")
+        if cut == -1:
+            return None
+        ready, self._pending = self._pending[: cut + 1], self._pending[cut + 1 :]
+        return self._emit(ready)
+
+    def flush(self) -> str | None:
+        """Return whatever is left (the last line has no trailing newline)."""
+        ready, self._pending = self._pending, ""
+        return self._emit(ready) if ready else None
+
+    def _emit(self, text: str) -> str:
+        self.started = True
+        return guard_output(text)
+
+
 def _sse_event(event: str, data: dict) -> str:
     """Format a single SSE event."""
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
@@ -60,6 +107,7 @@ async def stream_travel_plan(
     Events emitted:
       - `progress`: an agent node has started or completed (`status`: started | completed)
       - `agent_result`: an agent has finished (includes partial results)
+      - `answer_delta`: the next line(s) of the final answer, as it is being written
       - `complete`: the entire graph run completed
       - `clarification`: the run paused to ask the user a question;
         send the reply with the returned thread_id to continue
@@ -82,11 +130,20 @@ async def stream_travel_plan(
 
     running: set[str] = set()  # nodes currently executing (several at once when parallel)
     complete_payload: dict | None = None
+    answer = AnswerStreamer()
 
     try:
         async for event in graph.astream_events(plan.graph_input, config=config, version="v2"):
             kind = event.get("event", "")
             name = event.get("name", "")
+
+            # Final answer tokens → line-buffered, guarded deltas.
+            if kind == "on_chat_model_stream":
+                if event.get("metadata", {}).get("langgraph_node") == STREAMED_ANSWER_NODE:
+                    delta = answer.feed(_chunk_text(event.get("data", {}).get("chunk")))
+                    if delta:
+                        yield _sse_event("answer_delta", {"text": delta})
+                continue
 
             # Node start — lets the UI show which agents are working right now.
             # (Inner runnables reuse the node name; `running` de-duplicates them.)
@@ -104,6 +161,11 @@ async def stream_travel_plan(
                 running.discard(name)
                 display_name = AGENT_DISPLAY_NAMES[name]
                 icon = AGENT_ICONS.get(name, "⏳")
+
+                if name == STREAMED_ANSWER_NODE:
+                    tail = answer.flush()
+                    if tail:
+                        yield _sse_event("answer_delta", {"text": tail})
 
                 yield _sse_event("progress", {
                     "agent": name,

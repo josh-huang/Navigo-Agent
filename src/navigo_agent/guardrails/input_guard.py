@@ -68,7 +68,9 @@ INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
         re.IGNORECASE,
     )),
     ("prompt_leak", re.compile(
-        r"(reveal|show|print|display|tell\s+me)\s+(your\s+)?(system\s+)?(prompt|instructions?|rules?)",
+        # Must refer to the assistant's own prompt ("your ..." / "system ...") —
+        # "show rules for carry-on bags" or "print instructions" are travel questions.
+        r"(reveal|show|print|display|tell)\s+(me\s+)?(the\s+)?(your\s+(system\s+)?|system\s+)(prompt|instructions?|rules?)",
         re.IGNORECASE,
     )),
 ]

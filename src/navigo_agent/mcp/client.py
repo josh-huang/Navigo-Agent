@@ -1,8 +1,7 @@
 """MCP multi-server client for Navigo-Agent.
 
-Manages three MCP servers with lazy initialization and fault isolation:
+Manages two MCP servers with lazy initialization and fault isolation:
   - Tavily (HTTP) — web search for hotels / general info
-  - AviationStack (stdio) — airport, airline, flight data
   - Weather (stdio) — OpenWeather current + forecast via custom MCP server
 """
 
@@ -25,7 +24,6 @@ os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 load_dotenv()
 
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
-AVIATION_STACK_API_KEY = os.getenv("AVIATIONSTACK_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -35,9 +33,6 @@ WEATHER_SERVER_PATH = MCP_DIR / "weather_server.py"
 
 # Preserve the complete Windows environment when starting
 # local stdio MCP servers.
-AVIATION_ENV = os.environ.copy()
-AVIATION_ENV["AVIATION_STACK_API_KEY"] = AVIATION_STACK_API_KEY or ""
-
 WEATHER_ENV = os.environ.copy()
 WEATHER_ENV["OPENWEATHER_API_KEY"] = OPENWEATHER_API_KEY or ""
 
@@ -77,14 +72,6 @@ client = MultiServerMCPClient(
                 f"?tavilyApiKey={TAVILY_API_KEY}"
             ),
         },
-        "aviationstack": {
-            "transport": "stdio",
-            "command": sys.executable,
-            "args": [
-                "-m", "aviationstack_mcp"
-            ],
-            "env": AVIATION_ENV,
-        },
         "weather": {
             "transport": "stdio",
             "command": sys.executable,
@@ -109,7 +96,7 @@ async def get_all_tools():
     """
     all_tools = []
 
-    for server_name in ("tavily", "aviationstack", "weather"):
+    for server_name in ("tavily", "weather"):
         try:
             tools = await client.get_tools(server_name=server_name)
             all_tools.extend(tools)
@@ -133,7 +120,7 @@ async def initialize_mcp():
     """Initialize only Tavily.
 
     Previously this function initialized all MCP servers,
-    so an AviationStack or Weather failure also caused
+    so a Weather server failure also caused
     Tavily hotel search to fail.
     """
     global search_tool
@@ -157,52 +144,6 @@ async def tavily_mcp_search(query: str):
     await initialize_mcp()
     result = await search_tool.ainvoke({"query": query})
     return result
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# AviationStack MCP tools
-# ═══════════════════════════════════════════════════════════════════════
-
-aviation_tools = {}
-
-
-async def initialize_aviation_tools():
-    global aviation_tools
-
-    if aviation_tools:
-        return
-
-    tools = await client.get_tools(server_name="aviationstack")
-    aviation_tools = {tool.name: tool for tool in tools}
-
-    if not aviation_tools:
-        raise RuntimeError(
-            "AviationStack MCP connected but returned no tools."
-        )
-
-
-async def aviation_mcp_call(tool_name: str, tool_args: dict | None = None):
-    await initialize_aviation_tools()
-
-    tool = aviation_tools.get(tool_name)
-    if tool is None:
-        available_tools = ", ".join(sorted(aviation_tools.keys()))
-        raise ValueError(
-            f"AviationStack tool '{tool_name}' was not found."
-            f" Available tools: {available_tools or 'none'}"
-        )
-
-    result = await tool.ainvoke(tool_args or {})
-    return result
-
-
-async def get_aviation_tools():
-    """Return initialized AviationStack MCP tools with their schemas.
-
-    Each tool has: .name, .description, .input_schema (JSON Schema dict).
-    """
-    await initialize_aviation_tools()
-    return list(aviation_tools.values())
 
 
 # ═══════════════════════════════════════════════════════════════════════
