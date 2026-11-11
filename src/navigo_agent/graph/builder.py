@@ -11,14 +11,15 @@ Architecture:
 
 import asyncio
 import logging
-import selectors
 
-import psycopg
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END, START, StateGraph
 from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
-from navigo_agent.config import get_checkpointer_dsn
+from navigo_agent.config import DATABASE_URL, get_checkpointer_dsn
 from navigo_agent.graph.agents.final import final_synthesizer
 from navigo_agent.graph.agents.flight import flight_agent
 from navigo_agent.graph.agents.hotel import hotel_agent
@@ -91,84 +92,99 @@ def build_travel_graph() -> StateGraph:
     return graph
 
 
-# ── Checkpointer Initialization ──────────────────────────────────────
+# ── Checkpointer lifecycle ───────────────────────────────────────────
 #
-# IMPORTANT: asyncio.run() MUST happen at module import time, NOT lazily
-# on the first request.  When lazy-init fires inside a FastAPI handler,
-# Uvicorn's event loop is already running and Python ≥3.10 raises:
-#   RuntimeError: asyncio.run() cannot be called from a running event loop
+# The checkpointer is created inside the running event loop — FastAPI's
+# lifespan calls init_checkpointer() at startup and close_checkpointer() at
+# shutdown. Nothing touches the database at import time, so importing the
+# package (tests, scripts, tooling) never needs a reachable Postgres.
 #
-# Module-level init runs during `app.py` import (before Uvicorn starts)
-# so there is no event loop conflict.
+#   DATABASE_URL set   → AsyncPostgresSaver on a connection pool
+#   DATABASE_URL unset → in-memory MemorySaver (state is lost on restart)
 
-_checkpointer: AsyncPostgresSaver | None = None
+POOL_MAX_SIZE = 10
 
-
-async def _init_checkpointer():
-    """Create async Postgres connection and checkpointer."""
-    dsn = get_checkpointer_dsn()
-    async_conn = await psycopg.AsyncConnection.connect(
-        dsn,
-        autocommit=True,
-        row_factory=dict_row,
-    )
-    cp = AsyncPostgresSaver(async_conn)
-    await cp.setup()
-    return cp
+_checkpointer: BaseCheckpointSaver | None = None
+_pool: AsyncConnectionPool | None = None
+_compiled_graph = None
 
 
-def _eager_init_checkpointer() -> None:
-    """Initialise the module-level checkpointer synchronously.
+def _loop_supports_psycopg() -> bool:
+    """psycopg's async mode cannot run on Windows' ProactorEventLoop."""
+    proactor = getattr(asyncio, "ProactorEventLoop", None)
+    return proactor is None or not isinstance(asyncio.get_running_loop(), proactor)
 
-    Called at import time — before any event loop exists.
-    """
-    global _checkpointer
-    try:
-        _checkpointer = asyncio.run(
-            _init_checkpointer(),
-            loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()),
+
+async def init_checkpointer() -> BaseCheckpointSaver:
+    """Create the checkpointer. Call once, from inside the server's event loop."""
+    global _checkpointer, _pool, _compiled_graph
+
+    if _checkpointer is not None:
+        return _checkpointer
+
+    if not DATABASE_URL:
+        logger.warning(
+            "DATABASE_URL is not set — using an in-memory checkpointer. "
+            "Paused conversations are lost when the process restarts."
         )
-        logger.info("PostgreSQL checkpointer initialised (eager, import-time).")
-    except ValueError as error:
-        if "DATABASE_URL is missing" in str(error):
-            logger.warning(
-                "Skipping PostgreSQL checkpointer initialisation at import time "
-                "because DATABASE_URL is not set."
+        _checkpointer = MemorySaver()
+    elif not _loop_supports_psycopg():
+        logger.error(
+            "PostgreSQL checkpointing needs a selector event loop, but this process runs "
+            "on Windows' ProactorEventLoop. Start the app with `python app.py` (or "
+            "`uvicorn app:app --reload`). Falling back to an in-memory checkpointer."
+        )
+        _checkpointer = MemorySaver()
+    else:
+        pool = AsyncConnectionPool(
+            conninfo=get_checkpointer_dsn(),
+            max_size=POOL_MAX_SIZE,
+            open=False,
+            # Settings AsyncPostgresSaver requires of its connections
+            kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+        )
+        try:
+            await pool.open(wait=True, timeout=30)
+            saver = AsyncPostgresSaver(pool)
+            await saver.setup()
+        except Exception:
+            await pool.close()
+            logger.exception(
+                "Failed to initialise the PostgreSQL checkpointer. "
+                "Check DATABASE_URL and network connectivity."
             )
-            return
-        raise
-    except Exception:
-        logger.exception(
-            "Failed to initialise PostgreSQL checkpointer at import time. "
-            "Check DATABASE_URL in .env and network connectivity."
-        )
-        raise  # fail fast — app cannot serve requests without persistence
+            raise  # fail fast — a configured database that is unreachable is a deploy error
+        _pool, _checkpointer = pool, saver
+        logger.info("PostgreSQL checkpointer initialised (pool max_size=%d).", POOL_MAX_SIZE)
 
-
-_eager_init_checkpointer()
-
-
-def get_checkpointer() -> AsyncPostgresSaver:
-    """Return the module-level checkpointer (already initialised)."""
-    if _checkpointer is None:
-        raise RuntimeError(
-            "Checkpointer was not initialised. Ensure DATABASE_URL is set and startup "
-            "checkpointer initialization succeeds."
-        )
+    _compiled_graph = None  # recompile against the new checkpointer on next use
     return _checkpointer
+
+
+async def close_checkpointer() -> None:
+    """Release the connection pool. Safe to call when nothing was initialised."""
+    global _checkpointer, _pool, _compiled_graph
+    pool, _pool, _checkpointer, _compiled_graph = _pool, None, None, None
+    if pool is not None:
+        await pool.close()
+        logger.info("PostgreSQL connection pool closed.")
 
 
 # ── Compiled Graph (module-level singleton) ──────────────────────────
 
-_compiled_graph = None
-
-
 def get_compiled_graph():
-    """Return the compiled graph with PostgreSQL checkpointer."""
-    global _compiled_graph
+    """Return the compiled graph, bound to the active checkpointer.
+
+    If init_checkpointer() was never called (scripts, the evaluator, tests),
+    an in-memory checkpointer is used so the graph still works.
+    """
+    global _compiled_graph, _checkpointer
     if _compiled_graph is None:
-        checkpointer = get_checkpointer()
-        raw_graph = build_travel_graph()
-        _compiled_graph = raw_graph.compile(checkpointer=checkpointer)
-        logger.info("Graph compiled with PostgreSQL checkpointer.")
+        if _checkpointer is None:
+            logger.warning(
+                "Checkpointer not initialised — compiling the graph with an in-memory one."
+            )
+            _checkpointer = MemorySaver()
+        _compiled_graph = build_travel_graph().compile(checkpointer=_checkpointer)
+        logger.info("Graph compiled with %s.", type(_checkpointer).__name__)
     return _compiled_graph

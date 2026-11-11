@@ -27,7 +27,9 @@ User → FastAPI → Input Guard → LangGraph StateGraph
 - **Supervisor JSON routing**: the supervisor uses prompt-engineered JSON output with Pydantic parsing and a safe fallback.
 - **Shared ReAct infrastructure**: `react_utils.py` provides a generic `run_react_loop()` used by flight, hotel, and itinerary agents — DRY, testable, and extensible.
 - **Guardrails**: Input guard (length, injection detection, PII scanning, topic boundary) + Output guard (HTML strip, sensitive redaction, content safety).
-- **SSE Streaming**: Real-time agent progress via `POST /api/travel/stream` — frontend renders progress indicators as each agent completes.
+- **SSE Streaming**: Real-time agent progress via `POST /api/travel/stream` — each agent reports `started` and `completed`, so the UI shows which agents are running in parallel.
+- **Checkpointer lifecycle**: A Postgres connection pool is opened in FastAPI's lifespan (nothing connects at import time). Without `DATABASE_URL` the app falls back to an in-memory checkpointer, so it runs locally with no database.
+- **Answer shaped by intent**: Trip requests get the full sectioned plan; single-topic questions (weather, flights, hotels) get a focused answer.
 
 ## Tech Stack
 
@@ -215,6 +217,9 @@ A `thread_id` is only used to resume a paused run — every other request starts
 Same request body as `/api/travel`. Returns `text/event-stream`:
 
 ```
+event: progress
+data: {"agent":"weather_agent","display":"Checking weather","icon":"🌤️","status":"started"}
+
 event: progress
 data: {"agent":"weather_agent","display":"Checking weather","icon":"🌤️","status":"completed"}
 
