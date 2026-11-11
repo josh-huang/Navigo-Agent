@@ -170,3 +170,55 @@ def format_trip_details(trip: dict | None) -> str:
             "(do not invent these; give general guidance instead)"
         )
     return "\n".join(lines)
+
+
+# ── Clarification: which slots must be known before agents are dispatched ──
+
+SLOT_QUESTIONS = {
+    "destination": "Where would you like to go?",
+    "origin": "Which city are you departing from?",
+    "duration": "How many days is the trip (or what are your travel dates)?",
+}
+
+
+def missing_required_slots(intent: str, trip: dict | None) -> list[str]:
+    """Slots without which the given intent cannot be answered usefully.
+
+    Deliberately minimal — only things an agent cannot reasonably assume:
+      - any specific intent  → destination
+      - flight queries       → origin as well
+      - trip / itinerary     → trip length (days, or both dates) as well
+    `general` questions never trigger a clarification.
+    """
+    if intent == "general":
+        return []
+
+    slots = TripSlots(**(trip or {}))
+    missing: list[str] = []
+    if not slots.destination:
+        missing.append("destination")
+    if intent in {"flight", "flights"} and not slots.origin:
+        missing.append("origin")
+    if intent in {"full_trip", "itinerary"} and not (
+        slots.duration_days or (slots.start_date and slots.end_date)
+    ):
+        missing.append("duration")
+    return missing
+
+
+def build_clarification_question(missing: list[str]) -> str:
+    """Turn the missing-slot list into one short question for the user."""
+    questions = [SLOT_QUESTIONS[slot] for slot in missing if slot in SLOT_QUESTIONS]
+    if len(questions) == 1:
+        return f"Before I start planning, one quick question: {questions[0]}"
+    bullets = "\n".join(f"- {q}" for q in questions)
+    return f"Before I start planning, I need a few details:\n{bullets}"
+
+
+def merge_slots(base: dict | None, update: TripSlots) -> dict:
+    """Overlay newly extracted values on the existing slots (known values win only if new is empty)."""
+    merged = TripSlots(**(base or {})).model_dump()
+    for key, value in update.model_dump().items():
+        if value not in (None, [], ""):
+            merged[key] = value
+    return merged

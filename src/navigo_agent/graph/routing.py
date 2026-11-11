@@ -7,7 +7,15 @@ Routing functions: conditional edges driven by supervisor decisions.
 import logging
 import re
 
-from navigo_agent.graph.slots import extract_trip_request
+from langchain_core.messages import HumanMessage
+from langgraph.types import interrupt
+
+from navigo_agent.graph.slots import (
+    build_clarification_question,
+    extract_trip_request,
+    merge_slots,
+    missing_required_slots,
+)
 from navigo_agent.graph.supervisor import VALID_AGENT_NODES, _normalize_agent_name
 from navigo_agent.state import TravelState
 
@@ -97,6 +105,50 @@ async def intent_classifier(state: TravelState) -> dict:
         "trip": slots.model_dump(),
         "extracted_destination": slots.destination,
         "supervisor_loop_count": 0,
+        "llm_calls": 1,
+    }
+
+
+# ── Clarification Node (human-in-the-loop) ───────────────────────────
+
+async def clarify_node(state: TravelState) -> dict:
+    """Ask the user for essential details that are missing — at most once.
+
+    Uses LangGraph's `interrupt()`: the run pauses here (state is saved by the
+    checkpointer) and the question is returned to the caller. When the caller
+    resumes the thread with the user's reply, this node re-runs from the top
+    and `interrupt()` returns that reply.
+
+    There is no second round: after one reply the graph proceeds with whatever
+    is known, so an "I don't know" answer can never trap the user in a loop.
+    """
+    if not state.get("allow_clarification", True):
+        return {}
+
+    missing = missing_required_slots(state.get("user_intent", ""), state.get("trip"))
+    if not missing:
+        return {}
+
+    logger.info("Clarification needed — missing slots: %s", missing)
+    reply = interrupt({
+        "question": build_clarification_question(missing),
+        "missing": missing,
+    })
+
+    # ── Resumed with the user's reply ────────────────────────────────
+    reply_text = str(reply or "").strip()
+    if not reply_text:
+        return {}
+
+    combined_query = f"{state['user_query']}\n\nAdditional details from the user: {reply_text}"
+    _, new_slots = await extract_trip_request(combined_query)
+    trip = merge_slots(state.get("trip"), new_slots)
+    logger.info("Clarification received. Slots now: %s", trip)
+    return {
+        "user_query": combined_query,  # agents see the extra details too
+        "messages": [HumanMessage(content=reply_text)],
+        "trip": trip,
+        "extracted_destination": trip.get("destination"),
         "llm_calls": 1,
     }
 

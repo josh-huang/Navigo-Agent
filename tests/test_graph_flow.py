@@ -72,7 +72,8 @@ async def _run_graph(
     `react` optionally overrides the fake ReAct loop per agent name.
     """
     react = react or {}
-    slots = slots or TripSlots(destination="Tokyo")
+    # Complete enough that the clarify node never pauses in these tests.
+    slots = slots or TripSlots(origin="Dhaka", destination="Tokyo", duration_days=5)
     weather = weather or AsyncMock(return_value="sunny, 22C")
     forecast = forecast or AsyncMock(return_value="mild all week")
 
@@ -280,11 +281,11 @@ class TestParallelDispatch:
         assert visited.count("supervisor") == 2
         assert supervisor.calls == 2
         assert visited == [
-            "intent_classifier", "supervisor",
-            *visited[2:5],
+            "intent_classifier", "clarify", "supervisor",
+            *visited[3:6],
             "supervisor", "itinerary_agent", "final_synthesizer",
         ]
-        assert sorted(visited[2:5]) == ["flight_agent", "hotel_agent", "weather_agent"]
+        assert sorted(visited[3:6]) == ["flight_agent", "hotel_agent", "weather_agent"]
 
     @pytest.mark.asyncio
     async def test_parallel_writes_are_merged(self):

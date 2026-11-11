@@ -90,12 +90,27 @@ async def travel_planner(request: Request, request_data: TravelRequest):
             thread_id=request_data.thread_id,
         )
 
+        # ── Clarification: the agent needs more info before planning ────
+        if result.get("needs_clarification"):
+            return JSONResponse(
+                content={
+                    "success": True,
+                    "needs_clarification": True,
+                    "thread_id": result["thread_id"],
+                    "question": result["question"],
+                    "missing": result.get("missing", []),
+                    "answer": result["question"],
+                    "llm_calls": result.get("llm_calls", 0),
+                }
+            )
+
         # ── Output Guard ────────────────────────────────────────────────
         answer = guard_output(result.get("answer", ""))
 
         return JSONResponse(
             content={
                 "success": True,
+                "needs_clarification": False,
                 "thread_id": result["thread_id"],
                 "answer": answer,
                 "flight_results": guard_output(result.get("flight_results", "")),
@@ -125,6 +140,7 @@ async def travel_planner_stream(request: Request, request_data: TravelRequest):
       - progress: {agent, display, icon, status}
       - agent_result: partial result from a completed agent
       - complete: {thread_id, answer, ...}
+      - clarification: {thread_id, question, missing} — reply with the same thread_id
       - error: {message, thread_id}
 
     Frontend renders real-time progress indicators as agents complete.

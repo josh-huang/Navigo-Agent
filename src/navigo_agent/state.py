@@ -38,6 +38,7 @@ class TravelState(TypedDict):
     user_intent: str  # flight | hotel | weather | itinerary | full_trip | general
     trip: dict[str, Any]  # structured slots (see graph/slots.py: TripSlots)
     extracted_destination: str | None  # == trip["destination"], kept for convenience
+    allow_clarification: bool  # False → never pause to ask the user (batch / eval runs)
     supervisor_reasoning: str  # explainability: why this routing decision
     supervisor_loop_count: int  # safety bound, max 3
 
@@ -56,7 +57,7 @@ class TravelState(TypedDict):
     errors: Annotated[list[str], operator.add]
 
 
-def build_initial_state(user_input: str) -> dict:
+def build_initial_state(user_input: str, *, allow_clarification: bool = True) -> dict:
     """Fresh input state for one graph run (shared by invoke + streaming paths)."""
     return {
         "messages": [HumanMessage(content=user_input)],
@@ -64,6 +65,7 @@ def build_initial_state(user_input: str) -> dict:
         "user_intent": "",
         "trip": {},
         "extracted_destination": None,
+        "allow_clarification": allow_clarification,
         "supervisor_reasoning": "",
         "supervisor_loop_count": 0,
         "flight_results": "",

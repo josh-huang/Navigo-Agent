@@ -1,4 +1,4 @@
-"""Flight agent: ReAct loop over Tavily web search.
+"""Flight agent: ReAct loop over Tavily web search (native tool calling).
 
 Uses the shared react_utils module for the ReAct loop — only provides
 the system prompt builder and the search function (Tavily via MCP).
@@ -23,11 +23,11 @@ MAX_REACT_ITERATIONS = 3
 
 def _build_react_system_prompt(route: str, user_query: str, trip_details: str) -> str:
     """Build the ReAct system prompt with output format and search guidance."""
-    return f"""You are an expert flight travel researcher. You have access to a Tavily web search tool that returns real-time flight, airline, and travel information.
+    return f"""You are an expert flight travel researcher. You have access to a `web_search` tool (Tavily) that returns real-time flight, airline, and travel information.
 
 ## Your Goal
 
-Answer the user's flight-related query thoroughly. To do this, you can run up to {MAX_REACT_ITERATIONS} web searches before producing your final answer.
+Answer the user's flight-related query thoroughly. To do this, you can run up to {MAX_REACT_ITERATIONS} rounds of web searches before producing your final answer.
 
 ## Search Strategy (Multi-Hop)
 
@@ -37,15 +37,11 @@ Don't try to get everything in one search. Instead:
 3. **Second search** (if needed): target the gap — e.g. "Singapore Airlines Tokyo Narita direct flight price 2026"
 4. **Third search** (if needed): practical tips — baggage, booking timing, peak season for the route
 
-## Output Format
+## How to Work
 
-Respond with ONLY a JSON object (no markdown, no extra text):
-
-**To search the web:**
-{{"reasoning": "I have general route info but no specific airline names. I need to search for airlines on this route.", "action": "search", "query": "airlines flying Singapore to Tokyo direct flights 2026"}}
-
-**To give your final answer:**
-{{"reasoning": "I now have airport codes (SIN → NRT/HND), major airlines (Singapore Airlines, ANA, JAL, Scoot, Zipair), typical prices, and booking tips.", "action": "final_answer", "content": "## Flight Options: Singapore → Tokyo\\n\\n**Airports:** ...\\n\\n**Airlines:** ...\\n\\n**Estimated Airfare:** ...\\n\\n**Tips:** ..."}}
+- To look something up, call the `web_search` tool with a specific query. You may call it several times.
+- When you have enough information, reply with your final answer as plain markdown — no JSON, no tool call.
+- Start the final answer with a heading such as `## Flight Options: <origin> → <destination>`.
 
 ## Final Answer Requirements
 

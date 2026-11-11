@@ -1,6 +1,7 @@
 """SSE streaming tests — the stream must apply the same output guard as /api/travel."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -18,6 +19,9 @@ class FakeGraph:
     async def astream_events(self, _state, config=None, version=None):
         for event in self._events:
             yield event
+
+    async def aget_state(self, _config):
+        return SimpleNamespace(next=(), interrupts=())
 
 
 def _parse_sse(chunks: list[str]) -> list[tuple[str, dict]]:

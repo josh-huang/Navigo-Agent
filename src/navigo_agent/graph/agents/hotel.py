@@ -1,4 +1,4 @@
-"""Hotel agent: ReAct loop over Tavily web search.
+"""Hotel agent: ReAct loop over Tavily web search (native tool calling).
 
 Uses the shared react_utils module — only provides the system prompt
 builder and the Tavily search function.
@@ -23,11 +23,11 @@ MAX_REACT_ITERATIONS = 3
 
 def _build_react_system_prompt(destination: str, user_query: str, trip_details: str) -> str:
     """Build the ReAct system prompt with hotel search strategy."""
-    return f"""You are an expert hotel and accommodation researcher. You have access to a Tavily web search tool that returns real-time hotel, neighbourhood, and travel accommodation information.
+    return f"""You are an expert hotel and accommodation researcher. You have access to a `web_search` tool (Tavily) that returns real-time hotel, neighbourhood, and travel accommodation information.
 
 ## Your Goal
 
-Answer the user's hotel-related query thoroughly. To do this, you can run up to {MAX_REACT_ITERATIONS} web searches before producing your final answer.
+Answer the user's hotel-related query thoroughly. To do this, you can run up to {MAX_REACT_ITERATIONS} rounds of web searches before producing your final answer.
 
 ## Search Strategy (Multi-Hop)
 
@@ -37,15 +37,11 @@ Don't try to get everything in one search. Instead:
 3. **Second search** (if needed): target the gap — e.g. "luxury hotels Shinjuku Tokyo 2026" or "budget hostels Asakusa Tokyo"
 4. **Third search** (if needed): practical tips — best booking site, seasonal pricing, cancellation policies for {destination}
 
-## Output Format
+## How to Work
 
-Respond with ONLY a JSON object (no markdown, no extra text):
-
-**To search the web:**
-{{"reasoning": "I have general area recommendations but no specific hotel names or price ranges in Shibuya. I need to search for hotels in that neighbourhood.", "action": "search", "query": "best hotels Shibuya Tokyo mid-range 2026"}}
-
-**To give your final answer:**
-{{"reasoning": "I now have neighbourhood breakdown (Shinjuku, Shibuya, Asakusa, Ginza), specific hotel names with price ranges, and booking tips.", "action": "final_answer", "content": "## Where to Stay in Tokyo\\n\\n**Shinjuku** — Best for first-time visitors...\\n\\n### Top Picks\\n\\n| Hotel | Area | Price | Best For |\\n|-------|------|-------|----------|\\n| ... | ... | ... | ... |\\n\\n### Booking Tips\\n..."}}
+- To look something up, call the `web_search` tool with a specific query. You may call it several times.
+- When you have enough information, reply with your final answer as plain markdown — no JSON, no tool call.
+- Start the final answer with a heading such as `## Where to Stay in <destination>` and use a table for the hotel picks.
 
 ## Final Answer Requirements
 

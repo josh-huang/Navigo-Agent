@@ -16,12 +16,11 @@ Usage (in FastAPI route):
 
 import json
 import logging
-import uuid
 from collections.abc import AsyncGenerator
 
 from navigo_agent.graph.builder import get_compiled_graph
 from navigo_agent.guardrails import guard_output
-from navigo_agent.state import build_initial_state
+from navigo_agent.session import pending_clarification, plan_run
 
 logger = logging.getLogger(__name__)
 
@@ -62,28 +61,30 @@ async def stream_travel_plan(
       - `progress`: an agent node has started or completed
       - `agent_result`: an agent has finished (includes partial results)
       - `complete`: the entire graph run completed
+      - `clarification`: the run paused to ask the user a question;
+        send the reply with the returned thread_id to continue
       - `error`: a fatal error occurred
 
     Args:
         user_input: The user's travel request.
-        thread_id: Accepted for API compatibility; a new thread is always created.
+        thread_id: Thread of a run paused on a clarification question (resumes it).
+                   Otherwise ignored — every new request gets a fresh thread.
 
     Yields:
         SSE-formatted strings.
     """
-    # Fresh thread per run, same as run_travel_agent(): reducer-backed state
-    # (completed_agents, llm_calls, errors) must not leak between requests.
-    thread_id = f"user_{uuid.uuid4().hex}"
-    config = {"configurable": {"thread_id": thread_id}}
-
     graph = get_compiled_graph()
-
-    initial_state = build_initial_state(user_input)
+    # New run on a fresh thread — or, if `thread_id` is paused on a
+    # clarification question, resume it with this message as the reply.
+    plan = await plan_run(graph, user_input, thread_id)
+    thread_id = plan.thread_id
+    config = plan.config
 
     completed_nodes: set[str] = set()
+    complete_payload: dict | None = None
 
     try:
-        async for event in graph.astream_events(initial_state, config=config, version="v2"):
+        async for event in graph.astream_events(plan.graph_input, config=config, version="v2"):
             kind = event.get("event", "")
             name = event.get("name", "")
 
@@ -129,8 +130,10 @@ async def stream_travel_plan(
                         elif isinstance(last_msg, dict):
                             final_answer = last_msg.get("content", "")
 
-                    # Same output guard as the non-streaming endpoint
-                    yield _sse_event("complete", {
+                    # Held back until the stream ends: a run that pauses on a
+                    # clarification question also emits this event.
+                    # Same output guard as the non-streaming endpoint.
+                    complete_payload = {
                         "thread_id": thread_id,
                         "answer": guard_output(final_answer),
                         "flight_results": guard_output(output.get("flight_results", "")),
@@ -138,7 +141,13 @@ async def stream_travel_plan(
                         "weather_results": guard_output(output.get("weather_results", "")),
                         "itinerary": guard_output(output.get("itinerary", "")),
                         "llm_calls": output.get("llm_calls", 0),
-                    })
+                    }
+
+        clarification = await pending_clarification(graph, config)
+        if clarification:
+            yield _sse_event("clarification", {"thread_id": thread_id, **clarification})
+        elif complete_payload is not None:
+            yield _sse_event("complete", complete_payload)
 
     except Exception:
         logger.exception("Streaming graph execution failed for thread %s", thread_id)
