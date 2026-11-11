@@ -35,7 +35,7 @@ EVALUATION_CASES = [
         "id": "flight_only_001",
         "category": "flights",
         "query": "Find me flights from Dhaka to Dubai",
-        "expected_intent": "flights",
+        "expected_intent": "flight",
         "expected_agents": ["flight_agent"],
         "min_sections": 1,
     },

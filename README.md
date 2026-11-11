@@ -239,9 +239,14 @@ data: {"weather_results":"Current Weather:\n..."}
 event: progress
 data: {"agent":"flight_agent","display":"Searching flights","icon":"✈️","status":"completed"}
 
+event: answer_delta
+data: {"text":"## Trip Summary\n"}
+
 event: complete
 data: {"thread_id":"user_abc123...","answer":"## Trip Summary\n...","llm_calls":5}
 ```
+
+`answer_delta` events carry the final answer line by line while it is being written (each line passes the output guard first). The `complete` event carries the full answer and replaces what was streamed.
 
 When the agent needs more information the stream ends with a `clarification` event instead of `complete`:
 

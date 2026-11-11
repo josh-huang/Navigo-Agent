@@ -28,7 +28,7 @@ INTENT_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("weather", re.compile(
         r"\b(weather|temperature|forecast|rain|sunny|cloudy|hot|cold|humid|climate)\b", re.IGNORECASE
     )),
-    ("flights", re.compile(
+    ("flight", re.compile(
         r"\b(flights?|fly|flying|airlines?|airports?|depart(?:ure)?|arrive|arrival|airfare|one.way|round.trip)\b", re.IGNORECASE
     )),
     ("hotel", re.compile(

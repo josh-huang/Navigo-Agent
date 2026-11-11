@@ -229,3 +229,27 @@ class TestStreamProgressEvents:
         assert {a for a, s in data_events[:3]} == data_agents
         assert all(s == "started" for _, s in data_events[:3])
         assert parsed[-1][0] == "complete"
+
+
+class TestLiveAnswerThroughRealGraph:
+    @pytest.mark.asyncio
+    async def test_final_answer_tokens_are_streamed(self, graph_env):
+        """A real streaming chat model in the real graph produces answer_delta events."""
+        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+        from langchain_core.messages import AIMessage
+
+        import navigo_agent.graph.agents.final as final_mod
+
+        answer = "## Tokyo Weather\n\nSunny and mild all week.\nPack a light jacket."
+        model = GenericFakeChatModel(messages=iter([AIMessage(content=answer)]))
+        graph_env["extract"].return_value = ("weather", TripSlots(destination="Tokyo"))
+
+        with patch.object(final_mod, "get_llm", lambda **_: model):
+            parsed = _parse_sse([c async for c in streaming.stream_travel_plan("Weather in Tokyo?")])
+
+        deltas = [d["text"] for e, d in parsed if e == "answer_delta"]
+        assert len(deltas) >= 3                      # arrived in pieces, line by line
+        assert "".join(deltas) == answer
+        assert all(d.endswith("\n") for d in deltas[:-1])
+        assert parsed[-1][0] == "complete"
+        assert parsed[-1][1]["answer"] == answer

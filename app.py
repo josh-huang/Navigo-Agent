@@ -155,6 +155,7 @@ async def travel_planner_stream(request: Request, request_data: TravelRequest):
     Events:
       - progress: {agent, display, icon, status: started|completed}
       - agent_result: partial result from a completed agent
+      - answer_delta: {text} — next line(s) of the final answer while it is written
       - complete: {thread_id, answer, ...}
       - clarification: {thread_id, question, missing} — reply with the same thread_id
       - error: {message, thread_id}
