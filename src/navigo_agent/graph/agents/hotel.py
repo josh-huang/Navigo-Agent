@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from navigo_agent.config import get_llm
 from navigo_agent.graph.agents.react_utils import run_react_loop
+from navigo_agent.graph.slots import format_trip_details
 from navigo_agent.mcp import extract_mcp_text, tavily_mcp_search
 from navigo_agent.state import TravelState
 
@@ -20,7 +21,7 @@ MAX_REACT_ITERATIONS = 3
 
 # ── Prompt builder ────────────────────────────────────────────────────
 
-def _build_react_system_prompt(destination: str, user_query: str) -> str:
+def _build_react_system_prompt(destination: str, user_query: str, trip_details: str) -> str:
     """Build the ReAct system prompt with hotel search strategy."""
     return f"""You are an expert hotel and accommodation researcher. You have access to a Tavily web search tool that returns real-time hotel, neighbourhood, and travel accommodation information.
 
@@ -63,6 +64,10 @@ Cover these points (mark "N/A — not found in search" if genuinely unavailable)
 - After {MAX_REACT_ITERATIONS} searches, you MUST produce a final answer with whatever you have
 - Use markdown formatting (headings, tables, bullet points) for readability
 
+## Trip Details (extracted from the query)
+
+{trip_details}
+
 ## User's Travel Query
 
 {user_query}"""
@@ -84,7 +89,7 @@ async def hotel_agent(state: TravelState) -> dict:
     destination = state.get("extracted_destination") or query
     logger.info("Hotel agent (ReAct): processing '%s'", query[:80])
 
-    system_prompt = _build_react_system_prompt(destination, query)
+    system_prompt = _build_react_system_prompt(destination, query, format_trip_details(state.get("trip")))
     conversation: list = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=f"Find hotel and accommodation information for: {query}"),
@@ -98,18 +103,13 @@ async def hotel_agent(state: TravelState) -> dict:
         search_fn=_search_hotels,
         agent_name="hotel_agent",
         max_iterations=MAX_REACT_ITERATIONS,
-        llm_calls=state.get("llm_calls", 0),
     )
 
-    # ── Build state update ─────────────────────────────────────────────
-    completed = list(set(state.get("completed_agents", []) + ["hotel_agent"]))
-    pending = [a for a in state.get("pending_agents", []) if a != "hotel_agent"]
-
+    # State update: deltas only — reducers merge them with parallel agents' writes.
     return {
         "hotel_results": final_answer,
         "messages": [AIMessage(content=final_answer)],
         "llm_calls": llm_calls,
-        "errors": errors,  # reducer (operator.add) appends — return only new errors
-        "completed_agents": completed,
-        "pending_agents": pending,
+        "errors": errors,
+        "completed_agents": ["hotel_agent"],
     }

@@ -1,15 +1,13 @@
 """Intent classification and conditional routing for the supervisor graph.
 
-Intent classifier: lightweight first node that determines user intent.
+Intent classifier: first node — determines user intent and extracts trip slots.
 Routing functions: conditional edges driven by supervisor decisions.
 """
 
 import logging
 import re
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
-from navigo_agent.config import MAX_SUPERVISOR_LOOPS, get_llm
+from navigo_agent.graph.slots import extract_trip_request
 from navigo_agent.graph.supervisor import VALID_AGENT_NODES, _normalize_agent_name
 from navigo_agent.state import TravelState
 
@@ -74,99 +72,74 @@ def _fast_path_classify(query: str) -> str | None:
     return None  # ambiguous — let LLM classify
 
 
-async def _llm_classify(query: str) -> str:
-    """Use LLM to classify intent when fast path can't determine it."""
-    llm = get_llm(temperature=0.1)
-
-    prompt = f"""Classify this travel-related query into exactly one category.
-
-Categories:
-- flight: only asking about flights, airlines, airports
-- hotel: only asking about hotels, accommodations, places to stay
-- weather: only asking about weather, temperature, climate
-- itinerary: asking for a day-by-day plan based on already-known information
-- full_trip: asking for a complete trip plan including flights, hotels, and activities
-- general: none of the above, but still travel-related
-
-Query: "{query}"
-
-Respond with ONLY the category name (one word). No explanation."""
-
-    try:
-        response = await llm.ainvoke([
-            SystemMessage(content="You classify travel queries into intent categories."),
-            HumanMessage(content=prompt),
-        ])
-        result = response.content.strip().lower() if hasattr(response, "content") else "general"
-        valid = {"flight", "hotel", "weather", "itinerary", "full_trip", "general"}
-        return result if result in valid else "general"
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Intent classification LLM call failed: %s. Defaulting to full_trip.", e)
-        return "full_trip"
-
-
 # ── Intent Classifier Node ───────────────────────────────────────────
 
 async def intent_classifier(state: TravelState) -> dict:
-    """Classify user intent: fast-path regex first, LLM fallback if ambiguous."""
+    """Classify intent and extract structured trip slots in ONE LLM call.
+
+    Intent: the regex fast path wins when it is confident; otherwise the
+    extractor's intent is used. Slots (origin, destination, dates, budget...)
+    always come from the extractor and are shared with every agent.
+    """
     query = state["user_query"]
 
-    # Fast path
     fast_result = _fast_path_classify(query)
-    if fast_result:
-        logger.info("Intent classified (fast path): %s → %s", query[:80], fast_result)
-        return {
-            "user_intent": fast_result,
-            "supervisor_loop_count": 0,
-            "completed_agents": [],
-        }
+    llm_intent, slots = await extract_trip_request(query)
 
-    # LLM fallback
-    llm_result = await _llm_classify(query)
-    logger.info("Intent classified (LLM): %s → %s", query[:80], llm_result)
+    # Extraction failed AND regex unsure → assume the most complete plan.
+    intent = fast_result or llm_intent or "full_trip"
+    logger.info(
+        "Intent: %s (%s) | slots: %s",
+        intent, "fast path" if fast_result else "LLM", slots.model_dump(exclude_none=True),
+    )
     return {
-        "user_intent": llm_result,
+        "user_intent": intent,
+        "trip": slots.model_dump(),
+        "extracted_destination": slots.destination,
         "supervisor_loop_count": 0,
-        "completed_agents": [],
-        "llm_calls": state.get("llm_calls", 0) + 1,
+        "llm_calls": 1,
     }
 
 
 # ── Routing Functions (for conditional edges) ────────────────────────
 
-def route_after_intent(state: TravelState) -> str:
-    """After intent classification, always route to supervisor."""
-    return "supervisor"
+# Agents that gather independent data and can safely run side by side.
+PARALLEL_AGENTS = ("flight_agent", "hotel_agent", "weather_agent")
 
 
-def _safe_next_agent(pending: list[str]) -> str | None:
-    """Return the first valid agent name from the pending list.
-
-    Normalizes LLM output variations first (e.g. "flight" -> "flight_agent"),
-    then validates against known graph nodes. Skips names that can't be resolved.
-    Returns None if no valid agent remains in the list.
-    """
+def _valid_pending(pending: list[str]) -> list[str]:
+    """Normalize + validate the supervisor's dispatch list (order kept, no dupes)."""
+    valid: list[str] = []
     for agent in pending:
         normalized = _normalize_agent_name(agent)
-        if normalized in VALID_AGENT_NODES:
-            return normalized
-        logger.warning("Skipping invalid agent name '%s' — not a valid graph node.", agent)
-    return None
+        if normalized not in VALID_AGENT_NODES:
+            logger.warning("Skipping invalid agent name '%s' — not a valid graph node.", agent)
+        elif normalized not in valid:
+            valid.append(normalized)
+    return valid
 
 
-def route_after_supervisor(state: TravelState) -> str:
-    """Route based on supervisor's pending_agents list.
+def route_after_supervisor(state: TravelState) -> str | list[str]:
+    """Fan out to the supervisor's dispatch batch.
 
-    Returns next agent node to visit, or falls through to final.
+    Returns a LIST of node names when several data agents are dispatched —
+    LangGraph runs them concurrently in one superstep and the graph only
+    returns to the supervisor once all of them have finished.
+
+    itinerary_agent consumes the data agents' output, so it never runs in the
+    same batch as them: it is deferred until their results are in.
     """
-    pending = state.get("pending_agents", [])
+    pending = _valid_pending(state.get("pending_agents", []))
 
-    next_agent = _safe_next_agent(pending)
-    if next_agent:
-        logger.info("Routing to next pending agent: %s", next_agent)
-        return next_agent
+    data_agents = [a for a in pending if a in PARALLEL_AGENTS]
+    if data_agents:
+        logger.info("Dispatching in parallel: %s", data_agents)
+        return data_agents
 
-    # No valid pending agents. Only trip-planning intents get an automatic
+    if "itinerary_agent" in pending:
+        return "itinerary_agent"
+
+    # Nothing (valid) dispatched. Only trip-planning intents get an automatic
     # itinerary; single-topic queries (weather / flights / hotel) go straight
     # to the final answer unless the supervisor explicitly dispatched it.
     if state.get("user_intent") not in ITINERARY_INTENTS:
@@ -178,26 +151,5 @@ def route_after_supervisor(state: TravelState) -> str:
 
     if has_data and not has_itinerary and "itinerary_agent" not in completed:
         return "itinerary_agent"
-
-    return "final_synthesizer"
-
-
-def route_after_agent(state: TravelState) -> str:
-    """After an individual agent completes, decide what's next.
-
-    Check if more pending agents exist; if not, loop back to supervisor
-    for re-evaluation.
-    """
-    pending = state.get("pending_agents", [])
-    loop_count = state.get("supervisor_loop_count", 0)
-
-    next_agent = _safe_next_agent(pending)
-    if next_agent:
-        logger.info("Dispatching next pending agent: %s (remaining: %s)", next_agent, pending[1:])
-        return next_agent
-
-    # All dispatched agents done → back to supervisor for re-evaluation
-    if loop_count < MAX_SUPERVISOR_LOOPS:
-        return "supervisor"
 
     return "final_synthesizer"

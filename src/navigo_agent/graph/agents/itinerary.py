@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from navigo_agent.config import get_llm
 from navigo_agent.graph.agents.react_utils import run_react_loop
+from navigo_agent.graph.slots import format_trip_details
 from navigo_agent.mcp import extract_mcp_text, tavily_mcp_search
 from navigo_agent.state import TravelState
 
@@ -27,6 +28,7 @@ def _build_react_system_prompt(
     flight_data: str,
     hotel_data: str,
     weather_data: str,
+    trip_details: str,
 ) -> str:
     """Build the ReAct system prompt — includes pre-collected peer agent data."""
     return f"""You are an expert travel itinerary planner. You have access to a Tavily web search tool for real-time attraction, transport, and local information.
@@ -84,6 +86,10 @@ Respond with ONLY a JSON object (no markdown, no extra text):
 - After {MAX_REACT_ITERATIONS} searches, you MUST produce a final itinerary with whatever you have
 - Use markdown formatting (## headings, bullet points, **bold** for times/locations) for readability
 
+## Trip Details (extracted from the query)
+
+{trip_details}
+
 ## User's Travel Query
 
 {user_query}"""
@@ -114,6 +120,7 @@ async def itinerary_agent(state: TravelState) -> dict:
 
     system_prompt = _build_react_system_prompt(
         destination, query, flight_data, hotel_data, weather_data,
+        format_trip_details(state.get("trip")),
     )
     conversation: list = [
         SystemMessage(content=system_prompt),
@@ -128,18 +135,13 @@ async def itinerary_agent(state: TravelState) -> dict:
         search_fn=_search_itinerary,
         agent_name="itinerary_agent",
         max_iterations=MAX_REACT_ITERATIONS,
-        llm_calls=state.get("llm_calls", 0),
     )
 
-    # ── Build state update ─────────────────────────────────────────────
-    completed = list(set(state.get("completed_agents", []) + ["itinerary_agent"]))
-    pending = [a for a in state.get("pending_agents", []) if a != "itinerary_agent"]
-
+    # State update: deltas only — reducers merge them with parallel agents' writes.
     return {
         "itinerary": final_answer,
         "messages": [AIMessage(content=final_answer)],
         "llm_calls": llm_calls,
-        "errors": errors,  # reducer (operator.add) appends — return only new errors
-        "completed_agents": completed,
-        "pending_agents": pending,
+        "errors": errors,
+        "completed_agents": ["itinerary_agent"],
     }

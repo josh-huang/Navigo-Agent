@@ -118,7 +118,7 @@ async def run_react_loop(
         agent_name: Used in log messages for traceability.
         max_iterations: Max ReAct iterations before forcing final answer.
         max_observation_chars: Truncate each observation to this length.
-        llm_calls: Starting LLM call count (accumulated).
+        llm_calls: Starting count (default 0 → the return value is this loop's own calls).
 
     Returns:
         (final_answer: str, total_llm_calls: int, errors: list[str])

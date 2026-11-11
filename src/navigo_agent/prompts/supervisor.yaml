@@ -22,7 +22,8 @@ system:
     4. For full trip planning ("plan a 7-day Japan trip"): dispatch flight_agent + hotel_agent + weather_agent together, then itinerary_agent, then finalize
     5. For full trip planning ONLY: once flight/hotel/weather agents have run and returned results → dispatch itinerary_agent. Never dispatch itinerary_agent for weather-only, flight-only or hotel-only queries
     6. When itinerary exists, or a single-topic query has its result → set is_complete = true and next_action = "synthesize_final"
-    7. If an agent failed (check errors), skip it or retry once. Don't dispatch the same agent twice.
+    7. Never dispatch an agent listed under "Completed agents" — each agent runs at most once. If an agent failed (check errors), continue without it.
+    8. flight_agent, hotel_agent and weather_agent run in parallel: dispatch everything the request needs in ONE decision, not one agent per turn.
 
     Output a JSON object with exactly these fields:
     {{

@@ -56,7 +56,9 @@ async def test_stream_redacts_and_sanitises_output():
     by_event = dict(parsed)
     assert "[REDACTED:GROQ_KEY]" in by_event["agent_result"]["flight_results"]
     complete = by_event["complete"]
-    assert complete["thread_id"] == "t1"
+    # A fresh thread per run — reducer-backed state must not leak between requests
+    assert complete["thread_id"].startswith("user_")
+    assert complete["thread_id"] != "t1"
     assert complete["answer"].startswith("Plan [REDACTED:GROQ_KEY]")
     assert complete["hotel_results"] == "Hotel"
     assert complete["weather_results"] == "sunny"

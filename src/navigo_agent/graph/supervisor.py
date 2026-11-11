@@ -11,6 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from navigo_agent.config import MAX_SUPERVISOR_LOOPS, get_llm
+from navigo_agent.graph.slots import format_trip_details
 from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,8 @@ Decision rules:
 4. For full trip planning ("plan a 7-day Japan trip"): dispatch flight_agent + hotel_agent + weather_agent together, then itinerary_agent, then finalize
 5. For full trip planning ONLY: once flight/hotel/weather agents have run and returned results → dispatch itinerary_agent. Never dispatch itinerary_agent for weather-only, flight-only or hotel-only queries
 6. When itinerary exists, or a single-topic query has its result → set is_complete = true and next_action = "synthesize_final"
-7. If an agent failed (check errors), skip it or retry once. Don't dispatch the same agent twice.
+7. Never dispatch an agent listed under "Completed agents" — each agent runs at most once. If an agent failed (check errors), continue without it.
+8. flight_agent, hotel_agent and weather_agent run in parallel: dispatch everything the request needs in ONE decision, not one agent per turn.
 
 Output a JSON object with exactly these fields:
 {
@@ -135,7 +137,6 @@ Output ONLY the JSON. No markdown, no explanation outside the JSON.
 def _build_supervisor_prompt(state: TravelState) -> str:
     """Build the human message for the supervisor from current state."""
     completed = state.get("completed_agents", [])
-    pending = state.get("pending_agents", [])
     errors = state.get("errors", [])
     loop_count = state.get("supervisor_loop_count", 0)
 
@@ -147,10 +148,10 @@ def _build_supervisor_prompt(state: TravelState) -> str:
     return f"""Current State:
 - User query: "{state.get('user_query', '')}"
 - User intent: {state.get('user_intent', 'general')}
-- Extracted destination: {state.get('extracted_destination', 'not yet extracted')}
+- Trip details:
+{format_trip_details(state.get('trip'))}
 - Supervisor loop: {loop_count}/{MAX_SUPERVISOR_LOOPS}
 - Completed agents: {completed if completed else 'none'}
-- Pending agents: {pending if pending else 'none'}
 - Flight results: {'available' if has_flight else 'not yet'}
 - Hotel results: {'available' if has_hotel else 'not yet'}
 - Weather results: {'available' if has_weather else 'not yet'}
@@ -222,7 +223,6 @@ async def supervisor_node(state: TravelState) -> dict:
         return {
             "supervisor_reasoning": "Maximum supervisor loops reached. Finalizing.",
             "pending_agents": [],
-            "completed_agents": state.get("completed_agents", []),
             "supervisor_loop_count": loop_count + 1,
         }
 
@@ -241,21 +241,27 @@ async def supervisor_node(state: TravelState) -> dict:
         return {
             "supervisor_reasoning": f"LLM error: {e}. Finalizing with available data.",
             "pending_agents": [],
-            "completed_agents": state.get("completed_agents", []),
             "supervisor_loop_count": loop_count + 1,
             "errors": [f"supervisor_llm_error: {e!s}"],
         }
 
     decision = _parse_supervisor_output(raw_output)
 
-    # Update tracking lists
-    completed = list(state.get("completed_agents", []))
-    pending = list(decision.agents_to_dispatch)
+    # The supervisor is the only writer of pending_agents: it holds the batch
+    # for the next fan-out. Each agent runs at most once per request, so
+    # anything already completed is dropped here rather than trusted to the LLM.
+    completed = set(state.get("completed_agents", []))
+    pending: list[str] = []
+    for agent in decision.agents_to_dispatch:
+        if agent in completed:
+            logger.info("Supervisor re-dispatched completed agent '%s' — ignored.", agent)
+        elif agent not in pending:
+            pending.append(agent)
 
     logger.info(
         "Supervisor decision: action=%s agents=%s complete=%s reason=%s",
         decision.next_action,
-        decision.agents_to_dispatch,
+        pending,
         decision.is_complete,
         decision.reasoning,
     )
@@ -263,7 +269,6 @@ async def supervisor_node(state: TravelState) -> dict:
     return {
         "supervisor_reasoning": decision.reasoning,
         "pending_agents": pending,
-        "completed_agents": completed,
         "supervisor_loop_count": loop_count + 1,
-        "llm_calls": state.get("llm_calls", 0) + 1,
+        "llm_calls": 1,
     }

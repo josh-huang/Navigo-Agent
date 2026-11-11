@@ -13,10 +13,8 @@ Usage:
 import logging
 import uuid
 
-from langchain_core.messages import HumanMessage
-
 from navigo_agent.middleware import setup_middleware
-from navigo_agent.state import TravelState
+from navigo_agent.state import TravelState, build_initial_state
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +38,9 @@ async def run_travel_agent(user_input: str, thread_id: str | None = None) -> dic
                         weather_results, itinerary, llm_calls
     """
     # Always create a fresh thread for each invocation.
-    # Reusing a completed thread causes state accumulation (messages grow
-    # unbounded via operator.add) which confuses the LLM and can overflow
-    # the context window on subsequent requests.
+    # Reusing a completed thread makes every reducer-backed field (messages,
+    # errors, llm_calls, completed_agents) carry over from the previous run —
+    # e.g. agents would look "already completed" and never be dispatched.
     # Multi-turn support can be added later with proper state trimming.
     thread_id = f"user_{uuid.uuid4().hex}"
 
@@ -54,22 +52,7 @@ async def run_travel_agent(user_input: str, thread_id: str | None = None) -> dic
 
     try:
         result = await graph.ainvoke(
-            {
-                "messages": [HumanMessage(content=user_input)],
-                "user_query": user_input,
-                "user_intent": "",
-                "extracted_destination": None,
-                "supervisor_reasoning": "",
-                "supervisor_loop_count": 0,
-                "flight_results": "",
-                "hotel_results": "",
-                "weather_results": "",
-                "itinerary": "",
-                "pending_agents": [],
-                "completed_agents": [],
-                "llm_calls": 0,
-                "errors": [],
-            },
+            build_initial_state(user_input),
             config=config,
         )
     except Exception:

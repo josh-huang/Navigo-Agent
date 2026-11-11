@@ -19,10 +19,9 @@ import logging
 import uuid
 from collections.abc import AsyncGenerator
 
-from langchain_core.messages import HumanMessage
-
 from navigo_agent.graph.builder import get_compiled_graph
 from navigo_agent.guardrails import guard_output
+from navigo_agent.state import build_initial_state
 
 logger = logging.getLogger(__name__)
 
@@ -67,32 +66,19 @@ async def stream_travel_plan(
 
     Args:
         user_input: The user's travel request.
-        thread_id: Optional thread ID for session continuity.
+        thread_id: Accepted for API compatibility; a new thread is always created.
 
     Yields:
         SSE-formatted strings.
     """
-    thread_id = thread_id or f"user_{uuid.uuid4().hex}"
+    # Fresh thread per run, same as run_travel_agent(): reducer-backed state
+    # (completed_agents, llm_calls, errors) must not leak between requests.
+    thread_id = f"user_{uuid.uuid4().hex}"
     config = {"configurable": {"thread_id": thread_id}}
 
     graph = get_compiled_graph()
 
-    initial_state = {
-        "messages": [HumanMessage(content=user_input)],
-        "user_query": user_input,
-        "user_intent": "",
-        "extracted_destination": None,
-        "supervisor_reasoning": "",
-        "supervisor_loop_count": 0,
-        "flight_results": "",
-        "hotel_results": "",
-        "weather_results": "",
-        "itinerary": "",
-        "pending_agents": [],
-        "completed_agents": [],
-        "llm_calls": 0,
-        "errors": [],
-    }
+    initial_state = build_initial_state(user_input)
 
     completed_nodes: set[str] = set()
 
