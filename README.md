@@ -41,7 +41,7 @@ User → FastAPI → Input Guard → LangGraph StateGraph
 | Agent Graph      | LangGraph + LangChain                                          |
 | LLM              | Groq (Llama 3.3 70B Versatile)                                 |
 | Search           | Tavily MCP (web search) + OpenWeather MCP (weather)            |
-| MCP Protocol     | Multi-server: Tavily (HTTP), AviationStack (stdio), Weather (stdio) |
+| MCP Protocol     | Multi-server: Tavily (HTTP), Weather (stdio)                |
 | State Persist    | PostgreSQL (Render) via `langgraph-checkpoint-postgres`        |
 | Tracing          | LangSmith (optional, set env vars to enable)                   |
 | Geodata          | airportsdata + pycountry                                       |
@@ -67,14 +67,6 @@ Navigo-Agent/
 │   ├── guardrails/                #   Input/output safety
 │   │   ├── input_guard.py         #     Length, injection, PII, topic boundary
 │   │   └── output_guard.py        #     HTML strip, sensitive redaction, safety
-│   ├── prompts/                   #   Prompt management (YAML-based)
-│   │   ├── loader.py              #     YAML loader + variable interpolation
-│   │   ├── flight.yaml            #     Flight ReAct system prompt
-│   │   ├── hotel.yaml             #     Hotel ReAct system prompt
-│   │   ├── itinerary.yaml         #     Itinerary ReAct system prompt
-│   │   ├── supervisor.yaml        #     Supervisor routing prompt
-│   │   ├── intent.yaml            #     Intent classifier prompt
-│   │   └── final.yaml             #     Final synthesizer prompt
 │   ├── mcp/                       #   MCP integration layer
 │   │   ├── client.py              #     Multi-server MCP client
 │   │   └── weather_server.py      #     Custom Weather MCP Server (OpenWeather)
@@ -92,8 +84,6 @@ Navigo-Agent/
 │   ├── evaluation/                #   LLM-as-Judge evaluation harness
 │   │   ├── evaluator.py           #     Eval runner + LLM quality scoring
 │   │   └── test_cases.py          #     11 curated test cases
-│   └── memory/                    #   User preference persistence
-│       └── user_profile.py        #     PostgreSQL-backed preference storage
 ├── tests/                         # Test suite (27 tests)
 ├── static/                        # Frontend assets
 │   ├── style.css
@@ -145,7 +135,6 @@ cp .env.example .env
 | `TAVILY_API_KEY`         | Yes      | Tavily API key for web search (flight + hotel + itinerary) |
 | `OPENWEATHER_API_KEY`    | Yes      | OpenWeatherMap API key for weather data                |
 | `DATABASE_URL`           | Yes      | PostgreSQL URL for LangGraph checkpoint storage        |
-| `DEFAULT_ORIGIN_IATA`    | No       | Default departure airport (default: `DAC`)            |
 | `LANGCHAIN_TRACING_V2`   | No       | Set to `true` to enable LangSmith tracing              |
 | `LANGCHAIN_API_KEY`       | No       | LangSmith API key (required for tracing)               |
 | `LANGCHAIN_PROJECT`       | No       | LangSmith project name (default: `navigo-agent`)       |

@@ -15,9 +15,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # ── Optional Settings ─────────────────────────────────────────────────
-DEFAULT_ORIGIN_IATA = os.getenv("DEFAULT_ORIGIN_IATA", "DAC")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
-AVIATIONSTACK_API_KEY = os.getenv("AVIATIONSTACK_API_KEY")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 
 # ── LangSmith Tracing (optional but recommended) ──────────────────────
