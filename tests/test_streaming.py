@@ -40,6 +40,7 @@ async def _collect(events):
 @pytest.mark.asyncio
 async def test_stream_redacts_and_sanitises_output():
     events = [
+        {"event": "on_chain_start", "name": "flight_agent", "data": {}},
         {"event": "on_chain_end", "name": "flight_agent",
          "data": {"output": {"flight_results": f"key {FAKE_KEY} <script>alert(1)</script>"}}},
         {"event": "on_chain_end", "name": "LangGraph", "data": {"output": {
@@ -56,6 +57,9 @@ async def test_stream_redacts_and_sanitises_output():
     assert FAKE_KEY not in raw
     assert "<script" not in raw
     assert "<iframe" not in raw
+
+    progress = [(d["agent"], d["status"]) for e, d in parsed if e == "progress"]
+    assert progress == [("flight_agent", "started"), ("flight_agent", "completed")]
 
     by_event = dict(parsed)
     assert "[REDACTED:GROQ_KEY]" in by_event["agent_result"]["flight_results"]

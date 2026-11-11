@@ -199,9 +199,8 @@ function updateProgressItem(agentKey, status) {
         var statusEl = existing.querySelector(".progress-item__status");
         if (statusEl) {
             statusEl.textContent = status;
-            if (status === "Done ✅") {
-                statusEl.classList.remove("progress-item__status--running");
-            }
+            // toggle(…, force): a node can run again (the supervisor does)
+            statusEl.classList.toggle("progress-item__status--running", status !== "Done ✅");
         }
     } else {
         addProgressItem(agentKey, status);
@@ -273,7 +272,7 @@ function sendMessageStream() {
     setLoading(true);
     showProgressSection();
 
-    var completedCount = 0;
+    var doneAgents = {};   // agent key -> true (done) | false (running)
 
     fetch("/api/travel/stream", {
         method: "POST",
@@ -345,11 +344,23 @@ function sendMessageStream() {
     function handleSSEEvent(event, data) {
         switch (event) {
             case "progress":
-                // { agent, display, icon, status }
-                completedCount++;
-                updateProgressItem(data.agent, "Done ✅");
+                // { agent, display, icon, status: "started" | "completed" }
+                if (data.status === "started") {
+                    doneAgents[data.agent] = false;
+                    updateProgressItem(data.agent, "Running…");
+                } else {
+                    doneAgents[data.agent] = true;
+                    updateProgressItem(data.agent, "Done ✅");
+                }
+                var doneCount = 0, runningCount = 0;
+                for (var key in doneAgents) {
+                    if (doneAgents[key]) doneCount++; else runningCount++;
+                }
                 var summary = $("progressSummary");
-                if (summary) summary.textContent = completedCount + " agents completed";
+                if (summary) {
+                    summary.textContent = doneCount + " steps completed" +
+                        (runningCount ? " · " + runningCount + " running" : "");
+                }
                 break;
 
             case "agent_result":

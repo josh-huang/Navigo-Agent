@@ -7,6 +7,7 @@ Requires: OPENWEATHER_API_KEY in .env (free tier: https://openweathermap.org/api
 """
 
 import os
+from collections import Counter
 
 import requests
 from dotenv import load_dotenv
@@ -17,6 +18,7 @@ load_dotenv()
 mcp = FastMCP("Weather MCP Server")
 
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
+REQUEST_TIMEOUT_SECONDS = 10  # never hang the agent on a slow weather API
 
 
 @mcp.tool()
@@ -32,6 +34,7 @@ def get_current_weather(city: str) -> dict:
             "appid": OPENWEATHER_API_KEY,
             "units": "metric",
         },
+        timeout=REQUEST_TIMEOUT_SECONDS,
     )
     data = response.json()
 
@@ -49,11 +52,39 @@ def get_current_weather(city: str) -> dict:
     }
 
 
+def summarise_forecast(entries: list[dict]) -> list[dict]:
+    """Collapse 3-hourly forecast entries into one row per day.
+
+    Each row: date, min/max temperature (C) and the most frequent condition.
+    """
+    days: dict[str, dict] = {}
+    for item in entries:
+        day = str(item.get("dt_txt", ""))[:10]
+        main = item.get("main") or {}
+        if not day or "temp" not in main:
+            continue
+        bucket = days.setdefault(day, {"temps": [], "conditions": Counter()})
+        bucket["temps"].append(main.get("temp_min", main["temp"]))
+        bucket["temps"].append(main.get("temp_max", main["temp"]))
+        weather = item.get("weather") or [{}]
+        bucket["conditions"][weather[0].get("description", "unknown")] += 1
+
+    return [
+        {
+            "date": day,
+            "temp_min_c": round(min(bucket["temps"]), 1),
+            "temp_max_c": round(max(bucket["temps"]), 1),
+            "condition": bucket["conditions"].most_common(1)[0][0],
+        }
+        for day, bucket in sorted(days.items())
+    ]
+
+
 @mcp.tool()
 def get_forecast(city: str) -> dict:
-    """Fetch 5-day/3-hour forecast for a city.
+    """Fetch the 5-day forecast for a city, summarised per day.
 
-    Returns the first 5 forecast intervals (covers ~15 hours).
+    Returns one entry per day: date, min/max temperature (C), dominant conditions.
     """
     params = {
         "q": city,
@@ -64,6 +95,7 @@ def get_forecast(city: str) -> dict:
     response = requests.get(
         "https://api.openweathermap.org/data/2.5/forecast",
         params=params,
+        timeout=REQUEST_TIMEOUT_SECONDS,
     )
     data = response.json()
 
@@ -71,19 +103,11 @@ def get_forecast(city: str) -> dict:
     if response.status_code != 200 or "list" not in data:
         return data
 
-    # Return first 5 entries — enough for a practical travel forecast
-    # without overwhelming the LLM context window
-    forecast = []
-    for item in data["list"][:5]:
-        forecast.append({
-            "datetime": item["dt_txt"],
-            "temperature": item["main"]["temp"],
-            "weather": item["weather"][0]["description"],
-        })
-
+    # The API returns ~40 three-hourly entries. A per-day summary covers the
+    # whole 5 days in a handful of lines instead of only the next ~15 hours.
     return {
         "city": city,
-        "forecast": forecast,
+        "daily": summarise_forecast(data["list"]),
     }
 
 

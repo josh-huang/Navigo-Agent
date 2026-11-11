@@ -58,7 +58,7 @@ async def stream_travel_plan(
     """Stream the travel planning graph execution as SSE events.
 
     Events emitted:
-      - `progress`: an agent node has started or completed
+      - `progress`: an agent node has started or completed (`status`: started | completed)
       - `agent_result`: an agent has finished (includes partial results)
       - `complete`: the entire graph run completed
       - `clarification`: the run paused to ask the user a question;
@@ -80,7 +80,7 @@ async def stream_travel_plan(
     thread_id = plan.thread_id
     config = plan.config
 
-    completed_nodes: set[str] = set()
+    running: set[str] = set()  # nodes currently executing (several at once when parallel)
     complete_payload: dict | None = None
 
     try:
@@ -88,9 +88,20 @@ async def stream_travel_plan(
             kind = event.get("event", "")
             name = event.get("name", "")
 
+            # Node start — lets the UI show which agents are working right now.
+            # (Inner runnables reuse the node name; `running` de-duplicates them.)
+            if kind == "on_chain_start" and name in AGENT_DISPLAY_NAMES and name not in running:
+                running.add(name)
+                yield _sse_event("progress", {
+                    "agent": name,
+                    "display": AGENT_DISPLAY_NAMES[name],
+                    "icon": AGENT_ICONS.get(name, "⏳"),
+                    "status": "started",
+                })
+
             # Node completion events
-            if kind == "on_chain_end" and name in AGENT_DISPLAY_NAMES and name not in completed_nodes:
-                completed_nodes.add(name)
+            if kind == "on_chain_end" and name in AGENT_DISPLAY_NAMES and name in running:
+                running.discard(name)
                 display_name = AGENT_DISPLAY_NAMES[name]
                 icon = AGENT_ICONS.get(name, "⏳")
 

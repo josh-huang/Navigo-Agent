@@ -1,5 +1,6 @@
 """Clarification (human-in-the-loop) tests: pause on missing info, resume with the reply."""
 
+import itertools
 import json
 from unittest.mock import AsyncMock, patch
 
@@ -271,3 +272,27 @@ class TestClarificationApi:
             # The reply is sent back with the same thread_id
             TestClient(app).post("/api/travel", json={"message": "Tokyo", "thread_id": "user_abc"})
             assert run.await_args.kwargs == {"user_input": "Tokyo", "thread_id": "user_abc"}
+
+
+class TestStreamProgressEvents:
+    @pytest.mark.asyncio
+    async def test_every_node_reports_started_then_completed(self, graph_env):
+        graph_env["extract"].return_value = ("full_trip", TripSlots(destination="Tokyo", duration_days=5))
+        parsed = _parse_sse([c async for c in streaming.stream_travel_plan("Plan a 5-day trip to Tokyo")])
+        progress = [(d["agent"], d["status"]) for e, d in parsed if e == "progress"]
+
+        # Each node: equal numbers of started/completed, never completed before started
+        for agent in {a for a, _ in progress}:
+            statuses = [s for a, s in progress if a == agent]
+            assert statuses.count("started") == statuses.count("completed"), agent
+            assert statuses[0] == "started", agent
+            assert all(a != b for a, b in itertools.pairwise(statuses)), agent
+
+        # The supervisor runs twice (before and after the parallel batch)
+        assert [s for a, s in progress if a == "supervisor"] == ["started", "completed"] * 2
+        # The three data agents are all running before any of them finishes
+        data_agents = {"flight_agent", "hotel_agent", "weather_agent"}
+        data_events = [(a, s) for a, s in progress if a in data_agents]
+        assert {a for a, s in data_events[:3]} == data_agents
+        assert all(s == "started" for _, s in data_events[:3])
+        assert parsed[-1][0] == "complete"

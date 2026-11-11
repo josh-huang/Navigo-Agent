@@ -34,10 +34,12 @@ def configure_cors(app: FastAPI) -> None:
     origins_str = os.getenv("ALLOWED_ORIGINS", "*")
     origins = [o.strip() for o in origins_str.split(",") if o.strip()] if origins_str != "*" else ["*"]
 
+    # Credentials are only allowed for an explicit origin list: a wildcard
+    # origin combined with credentials is rejected by browsers and unsafe.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=True,
+        allow_credentials=origins != ["*"],
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization"],
     )

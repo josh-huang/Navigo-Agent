@@ -8,6 +8,7 @@ Routes:
 """
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -18,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from navigo_agent import run_travel_agent, setup_middleware
+from navigo_agent.graph.builder import close_checkpointer, init_checkpointer
 from navigo_agent.guardrails import guard_input, guard_output
 from navigo_agent.streaming import stream_travel_plan
 
@@ -25,10 +27,23 @@ BASE_DIR = Path(__file__).resolve().parent
 
 logger = logging.getLogger(__name__)
 
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Open the checkpointer (Postgres pool) at startup, close it at shutdown."""
+    await init_checkpointer()
+    try:
+        yield
+    finally:
+        await close_checkpointer()
+
+
 app = FastAPI(
     title="Navigo AI",
     description="LangGraph Multi-Agent Travel Planner with Supervisor, Guardrails, and MCP Integration",
     version="0.3.0",
+    lifespan=lifespan,
 )
 
 # ── Middleware ──────────────────────────────────────────────────────────
@@ -137,7 +152,7 @@ async def travel_planner_stream(request: Request, request_data: TravelRequest):
     """Streaming endpoint: submit a travel request and receive SSE progress.
 
     Events:
-      - progress: {agent, display, icon, status}
+      - progress: {agent, display, icon, status: started|completed}
       - agent_result: partial result from a completed agent
       - complete: {thread_id, answer, ...}
       - clarification: {thread_id, question, missing} — reply with the same thread_id
