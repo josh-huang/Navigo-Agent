@@ -8,6 +8,16 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 
+@pytest.fixture(autouse=True)
+def _fresh_rate_limits():
+    """Each test starts with an empty rate-limit bucket."""
+    from navigo_agent.middleware import limiter
+
+    limiter.reset()
+    yield
+    limiter.reset()
+
+
 @pytest.fixture
 def mock_llm_response():
     """Return a mock LLM response object with .content attribute."""

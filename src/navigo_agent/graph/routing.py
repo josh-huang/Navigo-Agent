@@ -14,6 +14,8 @@ from navigo_agent.graph.slots import (
     build_clarification_question,
     extract_follow_up,
     extract_trip_request,
+    is_english,
+    localise_question,
     merge_slots,
     missing_required_slots,
 )
@@ -129,6 +131,24 @@ async def intent_classifier(state: TravelState) -> dict:
 
 # ── Clarification Node (human-in-the-loop) ───────────────────────────
 
+async def prepare_clarification(state: TravelState) -> dict:
+    """Word the clarification question in the user's language, if one is needed.
+
+    A separate node from clarify_node on purpose: clarify_node re-runs from
+    the top when the thread is resumed, and the translation (an LLM call for
+    non-English users) should happen once, not again on every resume.
+    """
+    if not state.get("allow_clarification", True):
+        return {}
+    missing = missing_required_slots(state.get("user_intent", ""), state.get("trip"))
+    if not missing:
+        return {}
+
+    language = (state.get("trip") or {}).get("language")
+    question = await localise_question(build_clarification_question(missing), language)
+    return {"clarification_question": question, "llm_calls": 0 if is_english(language) else 1}
+
+
 async def clarify_node(state: TravelState) -> dict:
     """Ask the user for essential details that are missing — at most once.
 
@@ -147,11 +167,11 @@ async def clarify_node(state: TravelState) -> dict:
     if not missing:
         return {}
 
+    # Worded (and translated) by prepare_clarification; English template as a fallback.
+    question = state.get("clarification_question") or build_clarification_question(missing)
+
     logger.info("Clarification needed — missing slots: %s", missing)
-    reply = interrupt({
-        "question": build_clarification_question(missing),
-        "missing": missing,
-    })
+    reply = interrupt({"question": question, "missing": missing})
 
     # ── Resumed with the user's reply ────────────────────────────────
     reply_text = str(reply or "").strip()

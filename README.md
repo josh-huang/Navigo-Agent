@@ -84,7 +84,7 @@ Navigo-Agent/
 │   ├── evaluation/                #   LLM-as-Judge evaluation harness
 │   │   ├── evaluator.py           #     Eval runner + LLM quality scoring
 │   │   └── test_cases.py          #     11 curated test cases
-├── tests/                         # Test suite (27 tests)
+├── tests/                         # Test suite (pytest, fully mocked)
 ├── static/                        # Frontend assets
 │   ├── style.css
 │   └── script.js                  # SSE streaming + markdown rendering
@@ -134,12 +134,15 @@ cp .env.example .env
 | `GROQ_API_KEY`          | Yes      | Groq API key for LLM inference                         |
 | `TAVILY_API_KEY`         | Yes      | Tavily API key for web search (flight + hotel + itinerary) |
 | `OPENWEATHER_API_KEY`    | Yes      | OpenWeatherMap API key for weather data                |
-| `DATABASE_URL`           | Yes      | PostgreSQL URL for LangGraph checkpoint storage        |
+| `DATABASE_URL`           | No       | PostgreSQL URL for checkpoint storage. Unset → in-memory (state lost on restart) |
 | `LANGCHAIN_TRACING_V2`   | No       | Set to `true` to enable LangSmith tracing              |
 | `LANGCHAIN_API_KEY`       | No       | LangSmith API key (required for tracing)               |
 | `LANGCHAIN_PROJECT`       | No       | LangSmith project name (default: `navigo-agent`)       |
 | `ALLOWED_ORIGINS`         | No       | CORS origins (default: `*`)                            |
-| `RATE_LIMIT`              | No       | Rate limit string (default: `10/minute`)               |
+| `RATE_LIMIT`              | No       | Limit for the `/api/travel*` endpoints, per client (default: `10/minute`) |
+| `TRUSTED_PROXY_COUNT`     | No       | Number of reverse proxies in front of the app (default: `0`). Set to `1` behind a single proxy/load balancer so rate limits apply per user instead of per proxy |
+| `LOG_FORMAT`              | No       | Set to `json` for structured JSON logs (recommended in production) |
+| `LOG_LEVEL`               | No       | Log level when `LOG_FORMAT=json` (default: `INFO`)    |
 
 ## Running
 

@@ -6,6 +6,7 @@ thread_id, agent_name, and phase for traceability.
 
 import json
 import logging
+import os
 import sys
 from datetime import UTC, datetime
 
@@ -52,3 +53,16 @@ def configure_logging(level: int = logging.INFO) -> None:
 
     logger = logging.getLogger(__name__)
     logger.info("Structured logging configured.")
+
+
+def configure_logging_from_env() -> bool:
+    """Enable JSON logs when LOG_FORMAT=json (recommended in production).
+
+    Left alone otherwise, so local development keeps uvicorn's readable logs.
+    Returns True if structured logging was enabled.
+    """
+    if os.getenv("LOG_FORMAT", "").strip().lower() != "json":
+        return False
+    level = logging.getLevelNamesMapping().get(os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
+    configure_logging(level)
+    return True
