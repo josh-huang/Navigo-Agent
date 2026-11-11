@@ -67,15 +67,15 @@ async def stream_travel_plan(
 
     Args:
         user_input: The user's travel request.
-        thread_id: Thread of a run paused on a clarification question (resumes it).
-                   Otherwise ignored — every new request gets a fresh thread.
+        thread_id: A paused thread is resumed; a finished one makes this message
+                   a follow-up of that conversation (run on a new thread).
 
     Yields:
         SSE-formatted strings.
     """
     graph = get_compiled_graph()
-    # New run on a fresh thread — or, if `thread_id` is paused on a
-    # clarification question, resume it with this message as the reply.
+    # Resume `thread_id` if it is paused on a clarification question;
+    # otherwise a new run (a follow-up when `thread_id` is a finished turn).
     plan = await plan_run(graph, user_input, thread_id)
     thread_id = plan.thread_id
     config = plan.config
@@ -152,6 +152,7 @@ async def stream_travel_plan(
                         "weather_results": guard_output(output.get("weather_results", "")),
                         "itinerary": guard_output(output.get("itinerary", "")),
                         "llm_calls": output.get("llm_calls", 0),
+                        "follow_up": bool(output.get("history")),
                     }
 
         clarification = await pending_clarification(graph, config)

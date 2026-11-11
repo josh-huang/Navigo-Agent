@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from navigo_agent.config import MAX_SUPERVISOR_LOOPS, get_llm
-from navigo_agent.graph.slots import format_trip_details
+from navigo_agent.graph.slots import conversation_block, format_trip_details
 from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
@@ -157,6 +157,7 @@ def _build_supervisor_prompt(state: TravelState) -> str:
 - Weather results: {'available' if has_weather else 'not yet'}
 - Itinerary: {'available' if has_itinerary else 'not yet'}
 - Errors: {errors if errors else 'none'}
+{conversation_block(state.get('history'), answer_chars=150)}
 
 Decide which agents to dispatch next."""
 

@@ -23,6 +23,7 @@ User → FastAPI → Input Guard → LangGraph StateGraph
 - **ReAct Multi-Hop Search (native tool calling)**: Each search agent gets a `web_search` tool via `bind_tools()` and runs up to 3 rounds of Reason → Search → Observe. Final answers are plain markdown, not JSON-wrapped. If a tool-calling request fails, the agent falls back to a tool-free answer.
 - **Structured trip slots**: One LLM call at graph entry extracts intent plus origin, destination, dates, duration, travelers, budget and interests; every agent receives them.
 - **Clarification (human-in-the-loop)**: If essentials are missing (destination; origin for flight queries; trip length for trip plans), the graph pauses with a LangGraph `interrupt()` and asks once. The reply resumes the same thread via the Postgres checkpointer.
+- **Multi-turn conversations**: Sending the `thread_id` of a finished turn makes the next message a follow-up ("make it cheaper", "add 2 days"). The previous turns and trip slots are carried into a fresh run; the extractor decides whether the message really continues the conversation or starts a new topic.
 - **Parallel dispatch**: Flight, hotel and weather agents run concurrently in one superstep and fan in to the supervisor.
 - **Supervisor JSON routing**: the supervisor uses prompt-engineered JSON output with Pydantic parsing and a safe fallback.
 - **Shared ReAct infrastructure**: `react_utils.py` provides a generic `run_react_loop()` used by flight, hotel, and itinerary agents — DRY, testable, and extensible.
@@ -210,7 +211,16 @@ If essential details are missing, the agent asks instead of planning:
 ```
 
 Send the user's reply as `message` with the same `thread_id` to continue that run.
-A `thread_id` is only used to resume a paused run — every other request starts fresh.
+
+**How `thread_id` is interpreted**
+
+| `thread_id` you send            | What happens                                                              |
+|---------------------------------|---------------------------------------------------------------------------|
+| `null`                          | New, independent request                                                  |
+| a run paused on a question      | That run resumes with your message as the answer (same `thread_id` back)  |
+| a finished turn                 | Follow-up: new run seeded with that conversation (new `thread_id` back)   |
+
+Always send back the most recent `thread_id` to stay in the conversation; send `null` to start over. Responses include `"follow_up": true` when the message was handled as a follow-up.
 
 ### `POST /api/travel/stream`
 

@@ -12,6 +12,7 @@ from langgraph.types import interrupt
 
 from navigo_agent.graph.slots import (
     build_clarification_question,
+    extract_follow_up,
     extract_trip_request,
     merge_slots,
     missing_required_slots,
@@ -90,20 +91,37 @@ async def intent_classifier(state: TravelState) -> dict:
     always come from the extractor and are shared with every agent.
     """
     query = state["user_query"]
-
+    history = state.get("history") or []
     fast_result = _fast_path_classify(query)
-    llm_intent, slots = await extract_trip_request(query)
 
-    # Extraction failed AND regex unsure → assume the most complete plan.
-    intent = fast_result or llm_intent or "full_trip"
-    logger.info(
-        "Intent: %s (%s) | slots: %s",
-        intent, "fast path" if fast_result else "LLM", slots.model_dump(exclude_none=True),
-    )
+    if history:
+        # Continuing a conversation: the extractor sees the earlier turns and
+        # the previous slots, and decides whether this is really a follow-up.
+        llm_intent, slots, is_follow_up = await extract_follow_up(
+            query, history, state.get("previous_trip"),
+        )
+        if is_follow_up:
+            # The LLM saw the context ("add hotels to it" may mean re-plan);
+            # the regex only sees this one sentence, so it is the fallback here.
+            intent = llm_intent or fast_result or "full_trip"
+            trip = merge_slots(state.get("previous_trip"), slots)
+        else:
+            logger.info("Message starts a new topic — dropping conversation history.")
+            history = []
+            intent = fast_result or llm_intent or "full_trip"
+            trip = slots.model_dump()
+    else:
+        llm_intent, slots = await extract_trip_request(query)
+        # Extraction failed AND regex unsure → assume the most complete plan.
+        intent = fast_result or llm_intent or "full_trip"
+        trip = slots.model_dump()
+
+    logger.info("Intent: %s | follow-up: %s | slots: %s", intent, bool(history), trip)
     return {
         "user_intent": intent,
-        "trip": slots.model_dump(),
-        "extracted_destination": slots.destination,
+        "trip": trip,
+        "history": history,
+        "extracted_destination": trip.get("destination"),
         "supervisor_loop_count": 0,
         "llm_calls": 1,
     }

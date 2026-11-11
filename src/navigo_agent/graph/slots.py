@@ -111,41 +111,138 @@ Rules:
 - Output ONLY the JSON. No markdown, no explanation."""
 
 
-def parse_trip_extraction(raw: str) -> tuple[str | None, TripSlots]:
-    """Parse the extractor's output. Never raises — returns (None, empty) on garbage."""
+FOLLOW_UP_ADDENDUM = """
+
+This message continues an existing conversation.
+
+Previous trip details:
+{previous_trip}
+
+Conversation so far:
+{history}
+
+Additional rules for this message:
+- Add one more field to the JSON: "is_follow_up": true or false.
+  true  = the message refines, changes or asks more about the trip above
+          ("make it cheaper", "add 2 days", "what about hotels near the station?").
+  false = the message starts a new, unrelated request (a different trip).
+- If is_follow_up is true: return the UPDATED trip details — keep every previous value the
+  user did not change, and classify intent by what must be (re)done to answer:
+  "full_trip" when the whole plan has to be revised, or a single topic when only that is asked.
+- If is_follow_up is false: ignore the previous trip details completely."""
+
+
+def _parse_extraction(raw: str) -> tuple[str | None, TripSlots, dict]:
+    """Parse extractor output into (intent, slots, raw dict). Never raises."""
     text = raw.strip()
     start, end = text.find("{"), text.rfind("}")
     if start == -1 or end <= start:
         logger.warning("Trip extraction returned no JSON object: %.200s", raw)
-        return None, TripSlots()
+        return None, TripSlots(), {}
 
     try:
         data = json.loads(text[start : end + 1])
         if not isinstance(data, dict):
             raise TypeError("not a JSON object")
-        intent = str(data.pop("intent", "") or "").strip().lower()
+        intent = str(data.get("intent", "") or "").strip().lower()
         known = {k: v for k, v in data.items() if k in TripSlots.model_fields}
         slots = TripSlots(**known)
     except (json.JSONDecodeError, TypeError, ValueError) as e:
         logger.warning("Failed to parse trip extraction: %s. Raw: %.200s", e, raw)
-        return None, TripSlots()
+        return None, TripSlots(), {}
 
-    return (intent if intent in VALID_INTENTS else None), slots
+    return (intent if intent in VALID_INTENTS else None), slots, data
 
 
-async def extract_trip_request(query: str) -> tuple[str | None, TripSlots]:
-    """Run the extraction LLM call. Returns (intent or None, slots); never raises."""
+def parse_trip_extraction(raw: str) -> tuple[str | None, TripSlots]:
+    """Parse the extractor's output. Never raises — returns (None, empty) on garbage."""
+    intent, slots, _ = _parse_extraction(raw)
+    return intent, slots
+
+
+async def _call_extractor(system_prompt: str, query: str) -> str | None:
     try:
         llm = get_llm(temperature=0.0, max_tokens=400)
         response = await llm.ainvoke([
-            SystemMessage(content=EXTRACTION_SYSTEM_PROMPT.format(today=_today())),
+            SystemMessage(content=system_prompt),
             HumanMessage(content=query),
         ])
     except Exception as e:  # noqa: BLE001
         logger.warning("Trip extraction LLM call failed: %s", e)
-        return None, TripSlots()
+        return None
+    return str(response.content)
 
-    return parse_trip_extraction(str(response.content))
+
+async def extract_trip_request(query: str) -> tuple[str | None, TripSlots]:
+    """Run the extraction LLM call. Returns (intent or None, slots); never raises."""
+    raw = await _call_extractor(EXTRACTION_SYSTEM_PROMPT.format(today=_today()), query)
+    return parse_trip_extraction(raw) if raw is not None else (None, TripSlots())
+
+
+async def extract_follow_up(
+    query: str,
+    history: list[dict[str, str]],
+    previous_trip: dict | None,
+) -> tuple[str | None, TripSlots, bool]:
+    """Extraction for a message that continues a conversation.
+
+    Returns (intent or None, slots, is_follow_up). If the call or parsing
+    fails, the message is treated as a follow-up with no new slot values, so
+    the previous trip details are kept. Never raises.
+    """
+    system_prompt = EXTRACTION_SYSTEM_PROMPT.format(today=_today()) + FOLLOW_UP_ADDENDUM.format(
+        previous_trip=json.dumps(TripSlots(**(previous_trip or {})).model_dump(exclude_none=True)),
+        history=format_history(history) or "(none)",
+    )
+    raw = await _call_extractor(system_prompt, query)
+    if raw is None:
+        return None, TripSlots(), True
+
+    intent, slots, data = _parse_extraction(raw)
+    flag = data.get("is_follow_up", True)
+    if isinstance(flag, str):
+        flag = flag.strip().lower() not in {"false", "no", "0"}
+    return intent, slots, bool(flag)
+
+
+# ── Conversation history ──────────────────────────────────────────────
+
+MAX_HISTORY_TURNS = 4
+MAX_STORED_ANSWER_CHARS = 2000
+
+
+def append_turn(history: list[dict[str, str]] | None, user: str, assistant: str) -> list[dict[str, str]]:
+    """Return history + this turn, trimmed to the most recent MAX_HISTORY_TURNS."""
+    turn = {"user": user.strip(), "assistant": assistant.strip()[:MAX_STORED_ANSWER_CHARS]}
+    return [*(history or []), turn][-MAX_HISTORY_TURNS:]
+
+
+def format_history(history: list[dict[str, str]] | None, *, answer_chars: int = 300) -> str:
+    """Render earlier turns for a prompt. Empty string when there is no history.
+
+    Answers are cut to `answer_chars` — agents need the gist of what was said,
+    the final synthesizer asks for more so it can revise the previous plan.
+    """
+    lines: list[str] = []
+    for turn in history or []:
+        answer = str(turn.get("assistant", ""))
+        if len(answer) > answer_chars:
+            answer = answer[:answer_chars].rstrip() + " …"
+        lines.append(f"User: {turn.get('user', '')}")
+        lines.append(f"Assistant: {answer}")
+    return "\n".join(lines)
+
+
+def conversation_block(history: list[dict[str, str]] | None, *, answer_chars: int = 300) -> str:
+    """A ready-to-append prompt section about earlier turns ("" if none)."""
+    text = format_history(history, answer_chars=answer_chars)
+    if not text:
+        return ""
+    return (
+        "\n\n## Conversation So Far\n\n"
+        "The current request is a follow-up to this conversation. Read it in that light "
+        "(\"it\", \"cheaper\", \"instead\" refer to what was discussed).\n\n" + text
+    )
 
 
 def format_trip_details(trip: dict | None) -> str:

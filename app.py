@@ -126,6 +126,7 @@ async def travel_planner(request: Request, request_data: TravelRequest):
             content={
                 "success": True,
                 "needs_clarification": False,
+                "follow_up": result.get("follow_up", False),
                 "thread_id": result["thread_id"],
                 "answer": answer,
                 "flight_results": guard_output(result.get("flight_results", "")),
