@@ -162,11 +162,11 @@ def _build_supervisor_prompt(state: TravelState) -> str:
 Decide which agents to dispatch next."""
 
 
-def _parse_supervisor_output(raw: str) -> SupervisorDecision:
+def _parse_supervisor_output(raw: str) -> SupervisorDecision | None:
     """Parse the supervisor LLM output into a SupervisorDecision.
 
-    Handles malformed JSON by extracting the first JSON object found,
-    and falls back to a safe default (dispatch all remaining, finalize).
+    Handles markdown fences and surrounding text. Returns None when the
+    output cannot be parsed — the caller then uses the deterministic plan.
     """
     # Try to extract JSON from the response (handles markdown code fences)
     text = raw.strip()
@@ -199,13 +199,36 @@ def _parse_supervisor_output(raw: str) -> SupervisorDecision:
         return SupervisorDecision(**data)
     except (json.JSONDecodeError, TypeError, ValueError, KeyError) as e:
         logger.warning("Failed to parse supervisor output: %s. Raw: %.200s", e, raw)
-        # Fallback: signal completion to finalize with what we have
-        return SupervisorDecision(
-            reasoning="Fallback: could not parse routing decision, finalizing with available data.",
-            next_action="synthesize_final",
-            agents_to_dispatch=[],
-            is_complete=True,
-        )
+        return None
+
+
+# ── Deterministic fallback plan ───────────────────────────────────────
+#
+# What a correct supervisor would dispatch for each intent. Used when the
+# LLM cannot be trusted for this decision: the call failed, its output was
+# unparseable, or it tried to finalize before any data was gathered.
+# Without it, one supervisor hiccup produced an answer built on no data.
+
+FALLBACK_PLAN: dict[str, tuple[str, ...]] = {
+    "weather": ("weather_agent",),
+    "flight": ("flight_agent",),
+    "flights": ("flight_agent",),
+    "hotel": ("hotel_agent",),
+    "full_trip": ("flight_agent", "hotel_agent", "weather_agent"),
+    "itinerary": ("flight_agent", "hotel_agent", "weather_agent"),
+    "general": (),
+}
+
+
+def fallback_agents(state: TravelState) -> list[str]:
+    """Agents the intent calls for that have not run yet."""
+    completed = set(state.get("completed_agents", []))
+    planned = FALLBACK_PLAN.get(state.get("user_intent", ""), FALLBACK_PLAN["full_trip"])
+    return [agent for agent in planned if agent not in completed]
+
+
+def _has_any_data(state: TravelState) -> bool:
+    return any(state.get(key) for key in ("flight_results", "hotel_results", "weather_results", "itinerary"))
 
 
 # ── Supervisor Node ───────────────────────────────────────────────────
@@ -239,14 +262,25 @@ async def supervisor_node(state: TravelState) -> dict:
         raw_output = response.content if hasattr(response, "content") else str(response)
     except Exception as e:  # noqa: BLE001
         logger.error("Supervisor LLM call failed: %s", e)
+        pending = fallback_agents(state)
         return {
-            "supervisor_reasoning": f"LLM error: {e}. Finalizing with available data.",
-            "pending_agents": [],
+            "supervisor_reasoning": f"Supervisor LLM error — using the default plan for this intent: {pending or 'finalize'}.",
+            "pending_agents": pending,
             "supervisor_loop_count": loop_count + 1,
             "errors": [f"supervisor_llm_error: {e!s}"],
         }
 
     decision = _parse_supervisor_output(raw_output)
+    if decision is None:
+        pending = fallback_agents(state)
+        logger.warning("Supervisor output unparseable — default plan: %s", pending or "finalize")
+        return {
+            "supervisor_reasoning": f"Unparseable routing decision — using the default plan for this intent: {pending or 'finalize'}.",
+            "pending_agents": pending,
+            "supervisor_loop_count": loop_count + 1,
+            "llm_calls": 1,
+            "errors": ["supervisor_parse_error"],
+        }
 
     # The supervisor is the only writer of pending_agents: it holds the batch
     # for the next fan-out. Each agent runs at most once per request, so
@@ -259,6 +293,14 @@ async def supervisor_node(state: TravelState) -> dict:
         elif agent not in pending:
             pending.append(agent)
 
+    reasoning = decision.reasoning
+    # Finalizing with nothing gathered would give an answer built on no data.
+    if not pending and not _has_any_data(state) and not completed:
+        pending = fallback_agents(state)
+        if pending:
+            logger.warning("Supervisor dispatched nothing before any data existed — default plan: %s", pending)
+            reasoning = f"{reasoning} (No agents were dispatched; using the default plan: {pending}.)"
+
     logger.info(
         "Supervisor decision: action=%s agents=%s complete=%s reason=%s",
         decision.next_action,
@@ -268,7 +310,7 @@ async def supervisor_node(state: TravelState) -> dict:
     )
 
     return {
-        "supervisor_reasoning": decision.reasoning,
+        "supervisor_reasoning": reasoning,
         "pending_agents": pending,
         "supervisor_loop_count": loop_count + 1,
         "llm_calls": 1,

@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 MAX_REACT_ITERATIONS = 3
 MAX_OBSERVATION_CHARS = 3000
+SEARCH_TIMEOUT_SECONDS = 30  # a hung search must not stall the whole request
 
 SEARCH_TOOL_NAME = "web_search"
 
@@ -83,10 +84,14 @@ async def _run_search(
         observation = "Search failed: the 'query' argument was empty."
     else:
         try:
-            observation = await search_fn(query)
+            observation = await asyncio.wait_for(search_fn(query), timeout=SEARCH_TIMEOUT_SECONDS)
             if len(observation) > max_observation_chars:
                 observation = observation[:max_observation_chars] + "\n... [truncated]"
             logger.info("%s: search '%s' → %d chars", agent_name, query[:60], len(observation))
+        except TimeoutError:
+            observation = f"Search failed: no response within {SEARCH_TIMEOUT_SECONDS}s."
+            logger.warning("%s: search '%s' timed out", agent_name, query[:60])
+            errors.append(f"{agent_name}(search): timed out after {SEARCH_TIMEOUT_SECONDS}s")
         except Exception as e:  # noqa: BLE001
             observation = f"Search failed: {e}"
             logger.warning("%s: search failed: %s", agent_name, e)

@@ -11,6 +11,7 @@ Usage:
 """
 
 import logging
+import time
 
 from navigo_agent.middleware import setup_middleware
 from navigo_agent.state import TravelState
@@ -49,18 +50,28 @@ async def run_travel_agent(
         caller should send the user's reply with the same thread_id.
     """
     from navigo_agent.graph.builder import get_compiled_graph
-    from navigo_agent.session import clarification_from_result, plan_run
+    from navigo_agent.session import (
+        clarification_from_result,
+        log_run_summary,
+        plan_run,
+    )
 
     graph = get_compiled_graph()
     plan = await plan_run(graph, user_input, thread_id, allow_clarification=allow_clarification)
 
+    started = time.perf_counter()
     try:
         result = await graph.ainvoke(plan.graph_input, config=plan.config)
     except Exception:
         logger.exception("Graph invocation failed for thread %s", plan.thread_id)
+        log_run_summary(plan.thread_id, None, started, outcome="failed")
         raise
 
     clarification = clarification_from_result(result)
+    log_run_summary(
+        plan.thread_id, result, started,
+        outcome="awaiting_clarification" if clarification else "completed",
+    )
     if clarification:
         return {
             "thread_id": plan.thread_id,

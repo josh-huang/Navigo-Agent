@@ -13,6 +13,7 @@ Only the conversation history and slots are carried forward, explicitly.
 """
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -123,4 +124,30 @@ async def plan_run(
         {"configurable": {"thread_id": new_thread_id}},
         new_thread_id,
         resumed=False,
+    )
+
+
+def log_run_summary(thread_id: str, state: dict | None, started: float, *, outcome: str) -> None:
+    """One line per request: what was asked for, what it cost, what went wrong.
+
+    `started` is a time.perf_counter() value. With LOG_FORMAT=json the extras
+    become fields, so runs can be filtered by intent, duration or error count.
+    """
+    state = state if isinstance(state, dict) else {}
+    errors = list(state.get("errors") or [])
+    duration_ms = round((time.perf_counter() - started) * 1000)
+    logger.info(
+        "Run %s: thread=%s intent=%s agents=%s llm_calls=%s errors=%d duration_ms=%d",
+        outcome, thread_id, state.get("user_intent") or "-",
+        ",".join(state.get("completed_agents") or []) or "-",
+        state.get("llm_calls", 0), len(errors), duration_ms,
+        extra={
+            "thread_id": thread_id,
+            "outcome": outcome,
+            "intent": state.get("user_intent"),
+            "agents": list(state.get("completed_agents") or []),
+            "llm_calls": state.get("llm_calls", 0),
+            "errors": errors,
+            "duration_ms": duration_ms,
+        },
     )
