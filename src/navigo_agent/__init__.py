@@ -43,9 +43,10 @@ async def run_travel_agent(
         allow_clarification: False → never pause to ask the user (batch/eval).
 
     Returns:
-        dict with keys: thread_id, answer, flight_results, hotel_results,
+        dict with keys: thread_id, answer, intent, agents (the agents that
+                        ran), errors, flight_results, hotel_results,
                         weather_results, itinerary, llm_calls,
-                        needs_clarification, question, missing.
+                        needs_clarification, follow_up, question, missing.
         When needs_clarification is True, `answer` is the question and the
         caller should send the user's reply with the same thread_id.
     """
@@ -79,6 +80,9 @@ async def run_travel_agent(
             "needs_clarification": True,
             "question": clarification["question"],
             "missing": clarification["missing"],
+            "intent": result.get("user_intent", ""),
+            "agents": [],
+            "errors": list(result.get("errors", [])),
             "flight_results": "",
             "hotel_results": "",
             "weather_results": "",
@@ -96,6 +100,9 @@ async def run_travel_agent(
         "follow_up": bool(result.get("history")),
         "question": None,
         "missing": [],
+        "intent": result.get("user_intent", ""),
+        "agents": list(result.get("completed_agents", [])),
+        "errors": list(result.get("errors", [])),
         "flight_results": result.get("flight_results", ""),
         "hotel_results": result.get("hotel_results", ""),
         "weather_results": result.get("weather_results", ""),
