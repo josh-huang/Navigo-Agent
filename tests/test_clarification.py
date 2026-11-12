@@ -77,6 +77,12 @@ class TestClarificationFlow:
         assert result["needs_clarification"] is False
         assert result["answer"] == "FINAL PLAN"
         assert graph_env["extract"].await_count == 1
+        # What the evaluator reads: the intent and which agents actually ran.
+        assert result["intent"] == "full_trip"
+        assert sorted(result["agents"]) == [
+            "flight_agent", "hotel_agent", "itinerary_agent", "weather_agent",
+        ]
+        assert result["errors"] == []
 
     @pytest.mark.asyncio
     async def test_pause_then_resume(self, graph_env):
@@ -91,6 +97,7 @@ class TestClarificationFlow:
         assert "Where would you like to go?" in first["question"]
         assert first["answer"] == first["question"]
         assert first["flight_results"] == ""
+        assert first["agents"] == []
         graph_env["weather"].assert_not_awaited()  # no agent ran before the user answered
 
         second = await navigo_agent.run_travel_agent("Japan, for a week", thread_id=first["thread_id"])

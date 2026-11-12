@@ -1,7 +1,9 @@
 """Curated evaluation test cases for the Navigo-Agent supervisor system.
 
-Each case defines: query, expected_intent, expected_agents (the agents that
-SHOULD be dispatched), and a minimum quality threshold.
+Each case defines: query, expected_intent and expected_agents (the agents
+that SHOULD run; None → not asserted). A case may also carry a `follow_up`
+query, which is sent as a second turn of the same conversation — the
+second answer is the one judged for quality.
 """
 
 # ── Test Cases ───────────────────────────────────────────────────────
@@ -13,7 +15,6 @@ EVALUATION_CASES = [
         "query": "Plan a complete 7 days Japan trip from Bangladesh including flights, hotels and sightseeing under 2 lakhs.",
         "expected_intent": "full_trip",
         "expected_agents": ["flight_agent", "hotel_agent", "weather_agent", "itinerary_agent"],
-        "min_sections": 5,  # at least 5 of the 7 sections in final output
     },
     {
         "id": "weather_only_001",
@@ -21,7 +22,6 @@ EVALUATION_CASES = [
         "query": "What is the weather like in Tokyo right now?",
         "expected_intent": "weather",
         "expected_agents": ["weather_agent"],
-        "min_sections": 1,
     },
     {
         "id": "weather_only_002",
@@ -29,7 +29,6 @@ EVALUATION_CASES = [
         "query": "Tell me the forecast for Paris next week",
         "expected_intent": "weather",
         "expected_agents": ["weather_agent"],
-        "min_sections": 1,
     },
     {
         "id": "flight_only_001",
@@ -37,7 +36,6 @@ EVALUATION_CASES = [
         "query": "Find me flights from Dhaka to Dubai",
         "expected_intent": "flight",
         "expected_agents": ["flight_agent"],
-        "min_sections": 1,
     },
     {
         "id": "hotel_only_001",
@@ -45,7 +43,6 @@ EVALUATION_CASES = [
         "query": "Find budget hotels in Bangkok near Sukhumvit",
         "expected_intent": "hotel",
         "expected_agents": ["hotel_agent"],
-        "min_sections": 1,
     },
     {
         "id": "full_trip_002",
@@ -53,7 +50,6 @@ EVALUATION_CASES = [
         "query": "Plan a 5-day trip to Singapore with family, mid-range budget",
         "expected_intent": "full_trip",
         "expected_agents": ["flight_agent", "hotel_agent", "weather_agent", "itinerary_agent"],
-        "min_sections": 5,
     },
     {
         "id": "full_trip_003",
@@ -61,7 +57,6 @@ EVALUATION_CASES = [
         "query": "I want to visit Thailand for 7 days, help me plan everything",
         "expected_intent": "full_trip",
         "expected_agents": ["flight_agent", "hotel_agent", "weather_agent", "itinerary_agent"],
-        "min_sections": 5,
     },
     {
         "id": "general_001",
@@ -69,7 +64,6 @@ EVALUATION_CASES = [
         "query": "Tell me about Tokyo",
         "expected_intent": "general",
         "expected_agents": None,  # supervisor should decide — no strict assertion
-        "min_sections": 1,
     },
     {
         "id": "ambiguous_001",
@@ -77,7 +71,6 @@ EVALUATION_CASES = [
         "query": "What should I know before visiting Japan?",
         "expected_intent": "general",
         "expected_agents": None,
-        "min_sections": 1,
     },
     {
         "id": "complex_001",
@@ -85,7 +78,6 @@ EVALUATION_CASES = [
         "query": "Plan a 10-day adventure trip to New Zealand from Singapore, budget under 5000 SGD",
         "expected_intent": "full_trip",
         "expected_agents": ["flight_agent", "hotel_agent", "weather_agent", "itinerary_agent"],
-        "min_sections": 5,
     },
     {
         "id": "multi_city_001",
@@ -93,6 +85,20 @@ EVALUATION_CASES = [
         "query": "Plan a trip visiting both London and Paris over 10 days from New York",
         "expected_intent": "full_trip",
         "expected_agents": ["flight_agent", "hotel_agent", "weather_agent", "itinerary_agent"],
-        "min_sections": 5,
+    },
+    {
+        "id": "follow_up_001",
+        "category": "follow_up",
+        "query": "Plan a 4-day trip to Kyoto from Singapore next month, mid-range budget",
+        "follow_up": "Can you make it cheaper? Suggest budget hotels instead.",
+        "expected_intent": "full_trip",
+        "expected_agents": ["flight_agent", "hotel_agent", "weather_agent", "itinerary_agent"],
+    },
+    {
+        "id": "non_english_001",
+        "category": "full_trip",
+        "query": "帮我规划一个从上海出发去东京的5天行程，预算中等",
+        "expected_intent": "full_trip",
+        "expected_agents": ["flight_agent", "hotel_agent", "weather_agent", "itinerary_agent"],
     },
 ]

@@ -275,16 +275,28 @@ uv run pytest tests/ -v --cov=src/navigo_agent --cov-report=term-missing
 
 ## Evaluation
 
+Runs the curated cases in `evaluation/test_cases.py` against the real agent, so it needs `GROQ_API_KEY` and `TAVILY_API_KEY` and makes real API calls.
+
 ```bash
-# Run the LLM-as-Judge evaluation suite
+# Run the whole suite
 uv run python -m navigo_agent.evaluation.evaluator
+
+# Run one case, or one category (both flags are repeatable)
+uv run python -m navigo_agent.evaluation.evaluator --case weather_only_001
+uv run python -m navigo_agent.evaluation.evaluator --category full_trip
+
+# Save per-case results to compare runs over time
+uv run python -m navigo_agent.evaluation.evaluator --output eval.json
 ```
 
 The evaluator measures:
-- **Tool accuracy**: did the supervisor dispatch the correct agents?
-- **Quality score**: LLM-judged relevance, completeness, faithfulness (1-5)
+- **Intent accuracy**: did the classifier pick the expected intent?
+- **Tool accuracy**: did the right specialist agents run?
+- **Quality score**: LLM-judged relevance, completeness, faithfulness (1-5). Completeness is judged against what the query asked for, so a weather-only answer is not marked down for having no itinerary.
 - **Latency**: end-to-end response time
 - **Error handling**: graceful degradation vs crash
+
+A case with a `follow_up` query runs a second turn of the same conversation and fails if that turn is not treated as a follow-up.
 
 ## License
 
