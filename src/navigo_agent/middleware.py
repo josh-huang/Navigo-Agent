@@ -3,6 +3,8 @@
 import os
 
 from fastapi import FastAPI, Request, Response
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
@@ -106,18 +108,69 @@ def configure_rate_limiting(app: FastAPI) -> None:
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 
-def configure_request_size_limit(app: FastAPI) -> None:
-    """Reject request bodies over MAX_REQUEST_BODY_BYTES."""
+class RequestSizeLimitMiddleware:
+    """Bound actual request bytes before any route parses or buffers the body."""
 
-    @app.middleware("http")
-    async def limit_request_size(request: Request, call_next):
-        content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > MAX_REQUEST_BODY_BYTES:
-            return JSONResponse(
-                status_code=413,
-                content={"success": False, "error": "Request body too large. Maximum is 10 KB."},
-            )
-        return await call_next(request)
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        declared = Headers(scope=scope).get("content-length")
+        if declared is not None:
+            try:
+                if not declared.isascii() or not declared.isdecimal():
+                    raise ValueError("invalid length")
+                length = int(declared)
+            except ValueError:
+                response = JSONResponse(
+                    status_code=400,
+                    content={"success": False, "error": "Invalid Content-Length."},
+                )
+                await response(scope, receive, send)
+                return
+            if length > MAX_REQUEST_BODY_BYTES:
+                await self.too_large(scope, receive, send)
+                return
+
+        body = bytearray()
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            chunk = message.get("body", b"")
+            if len(body) + len(chunk) > MAX_REQUEST_BODY_BYTES:
+                await self.too_large(scope, receive, send)
+                return
+            body.extend(chunk)
+            if not message.get("more_body", False):
+                break
+
+        delivered = False
+
+        async def replay() -> Message:
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": bytes(body), "more_body": False}
+            return await receive()
+
+        await self.app(scope, replay, send)
+
+    async def too_large(self, scope: Scope, receive: Receive, send: Send) -> None:
+        response = JSONResponse(
+            status_code=413,
+            content={"success": False, "error": "Request body too large. Maximum is 10 KB."},
+        )
+        await response(scope, receive, send)
+
+
+def configure_request_size_limit(app: FastAPI) -> None:
+    """Reject oversized bodies, including requests without Content-Length."""
+    app.add_middleware(RequestSizeLimitMiddleware)
 
 
 def setup_middleware(app: FastAPI) -> None:
