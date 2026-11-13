@@ -3,13 +3,13 @@
 import os
 
 from fastapi import FastAPI, Request, Response
-from starlette.datastructures import Headers
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 MAX_REQUEST_BODY_BYTES = 10_241  # ~10 KB
 
