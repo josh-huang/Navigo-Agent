@@ -1,5 +1,3 @@
-"""Request limits apply to streamed bytes, not just Content-Length metadata."""
-
 import httpx
 import pytest
 from fastapi import FastAPI, Request
@@ -70,4 +68,3 @@ async def test_chunked_body_at_limit_is_replayed_intact(limited_app):
     assert response.status_code == 200
     assert response.json()["body"] == "a" * (MAX_REQUEST_BODY_BYTES - 1) + "b"
     assert limited_app.state.calls == 1
-
