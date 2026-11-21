@@ -7,9 +7,10 @@ and searches for attraction/transport/dining gaps.
 
 import logging
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from navigo_agent.config import get_llm
+from navigo_agent.graph.agents.delegation import report, task_block
 from navigo_agent.graph.agents.react_utils import run_react_loop
 from navigo_agent.graph.slots import conversation_block, format_trip_details
 from navigo_agent.mcp import extract_mcp_text, tavily_mcp_search
@@ -120,7 +121,7 @@ async def itinerary_agent(state: TravelState) -> dict:
     )
     conversation: list = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=f"Create a detailed day-by-day travel itinerary for: {query}{conversation_block(state.get('history'))}"),
+        HumanMessage(content=f"Create a detailed day-by-day travel itinerary for: {query}{task_block(state)}{conversation_block(state.get('history'))}"),
     ]
 
     llm = get_llm(temperature=0.5)  # higher temp for creative planning variety
@@ -133,11 +134,5 @@ async def itinerary_agent(state: TravelState) -> dict:
         max_iterations=MAX_REACT_ITERATIONS,
     )
 
-    # State update: deltas only — reducers merge them with parallel agents' writes.
-    return {
-        "itinerary": final_answer,
-        "messages": [AIMessage(content=final_answer)],
-        "llm_calls": llm_calls,
-        "errors": errors,
-        "completed_agents": ["itinerary_agent"],
-    }
+    # Report back to the orchestrator (deltas only — reducers merge parallel writes).
+    return report(state, "itinerary_agent", final_answer, llm_calls=llm_calls, errors=errors)

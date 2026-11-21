@@ -1,15 +1,18 @@
-"""TravelState TypedDict for the supervisor-driven LangGraph.
+"""TravelState TypedDict for the orchestrator-driven LangGraph.
 
-Extended from the original linear pipeline to support:
+One main agent (the orchestrator) owns the request: it delegates research to
+specialist sub-agents through tool calls, reads their reports and writes the
+final answer. The state carries:
   - Intent classification + structured trip slots
-  - Supervisor routing decisions
-  - Parallel agent dispatch (fan-out) with reducer-merged tracking fields
-  - Error accumulation (graceful degradation)
+  - The orchestrator's transcript (`messages`): its delegation tool calls and
+    the sub-agents' reports as ToolMessages, ending with the final answer
+  - Per-sub-agent results, tracking and error accumulation
 
-Reducers matter here: flight / hotel / weather agents run in the SAME graph
+Reducers matter here: sub-agents delegated in one round run in the SAME graph
 superstep, so any key more than one of them writes must declare how the
-concurrent writes are merged. Such nodes return *deltas* (their own calls,
-their own errors, their own name), never a rebuilt copy of the old value.
+concurrent writes are merged. Such nodes return *deltas* (their own report,
+their own calls, their own errors, their own name), never a rebuilt copy of
+the old value.
 """
 
 import operator
@@ -28,13 +31,16 @@ def merge_unique(left: list[str] | None, right: list[str] | None) -> list[str]:
 
 
 class TravelState(TypedDict):
-    """State flowing through the supervisor-orchestrated travel graph."""
+    """State flowing through the orchestrator-driven travel graph."""
 
     # ── Core ──────────────────────────────────────────────────────
+    # The user's message(s), then the orchestrator's transcript:
+    #   AIMessage(tool_calls=…) → one ToolMessage per delegated sub-agent → …
+    # The last message of a finished run is the final answer.
     messages: Annotated[list[AnyMessage], operator.add]
     user_query: str
 
-    # ── Intent & Routing ──────────────────────────────────────────
+    # ── Intent & Slots ────────────────────────────────────────────
     user_intent: str  # flight | hotel | weather | itinerary | full_trip | general
     trip: dict[str, Any]  # structured slots (see graph/slots.py: TripSlots)
     # Multi-turn: earlier turns of this conversation, oldest first:
@@ -45,18 +51,22 @@ class TravelState(TypedDict):
     extracted_destination: str | None  # == trip["destination"], kept for convenience
     allow_clarification: bool  # False → never pause to ask the user (batch / eval runs)
     clarification_question: str  # the question to ask, already in the user's language
-    supervisor_reasoning: str  # explainability: why this routing decision
-    supervisor_loop_count: int  # safety bound, max 3
 
-    # ── Agent Results ─────────────────────────────────────────────
+    # ── Orchestration ─────────────────────────────────────────────
+    orchestrator_rounds: int  # delegation rounds issued so far — written ONLY by the orchestrator
+    # Present only in the payload a sub-agent receives via Send():
+    #   {"id": "<tool call id>", "args": {...}}
+    # Sub-agents never write it back, so it stays empty in the graph state.
+    delegation: dict[str, Any]
+
+    # ── Sub-agent Results ─────────────────────────────────────────
     flight_results: str
     hotel_results: str
     weather_results: str
     itinerary: str
 
-    # ── Agent Tracking ────────────────────────────────────────────
-    pending_agents: list[str]  # current dispatch batch — written ONLY by the supervisor
-    completed_agents: Annotated[list[str], merge_unique]  # agents append their own name
+    # ── Sub-agent Tracking ────────────────────────────────────────
+    completed_agents: Annotated[list[str], merge_unique]  # sub-agents append their own name
 
     # ── Metrics & Errors ──────────────────────────────────────────
     llm_calls: Annotated[int, operator.add]  # nodes return the number of calls THEY made
@@ -81,13 +91,12 @@ def build_initial_state(
         "extracted_destination": None,
         "allow_clarification": allow_clarification,
         "clarification_question": "",
-        "supervisor_reasoning": "",
-        "supervisor_loop_count": 0,
+        "orchestrator_rounds": 0,
+        "delegation": {},
         "flight_results": "",
         "hotel_results": "",
         "weather_results": "",
         "itinerary": "",
-        "pending_agents": [],
         "completed_agents": [],
         "llm_calls": 0,
         "errors": [],

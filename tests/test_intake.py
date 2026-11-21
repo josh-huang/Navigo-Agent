@@ -1,8 +1,8 @@
-"""Tests for intent classification and routing logic."""
+"""Tests for intake: fast-path intent classification."""
 
 import pytest
 
-from navigo_agent.graph.routing import _fast_path_classify
+from navigo_agent.graph.intake import _fast_path_classify
 
 
 class TestIntentClassifier:

@@ -228,8 +228,8 @@ class TestStreamProgressEvents:
             assert statuses[0] == "started", agent
             assert all(a != b for a, b in itertools.pairwise(statuses)), agent
 
-        # The supervisor runs twice (before and after the parallel batch)
-        assert [s for a, s in progress if a == "supervisor"] == ["started", "completed"] * 2
+        # The orchestrator takes three turns: delegate research, delegate the itinerary, answer
+        assert [s for a, s in progress if a == "orchestrator"] == ["started", "completed"] * 3
         # The three data agents are all running before any of them finishes
         data_agents = {"flight_agent", "hotel_agent", "weather_agent"}
         data_events = [(a, s) for a, s in progress if a in data_agents]
@@ -241,22 +241,59 @@ class TestStreamProgressEvents:
 class TestLiveAnswerThroughRealGraph:
     @pytest.mark.asyncio
     async def test_final_answer_tokens_are_streamed(self, graph_env):
-        """A real streaming chat model in the real graph produces answer_delta events."""
-        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+        """A real streaming chat model in the real graph produces answer_delta events:
+        the orchestrator delegates first (nothing streamed), then its answer arrives live."""
         from langchain_core.messages import AIMessage
 
-        import navigo_agent.graph.agents.final as final_mod
+        import navigo_agent.graph.orchestrator as orchestrator_mod
+        from tests.fakes import StreamingOrchestratorLLM, tool_call
 
         answer = "## Tokyo Weather\n\nSunny and mild all week.\nPack a light jacket."
-        model = GenericFakeChatModel(messages=iter([AIMessage(content=answer)]))
+        model = StreamingOrchestratorLLM(messages=iter([
+            AIMessage(content="", tool_calls=[tool_call("weather_agent", city="Tokyo")]),
+            AIMessage(content=answer),
+        ]))
         graph_env["extract"].return_value = ("weather", TripSlots(destination="Tokyo"))
 
-        with patch.object(final_mod, "get_llm", lambda **_: model):
+        with patch.object(orchestrator_mod, "get_llm", lambda **_: model):
             parsed = _parse_sse([c async for c in streaming.stream_travel_plan("Weather in Tokyo?")])
 
+        events = [e for e, _ in parsed]
+        assert "answer_reset" not in events
         deltas = [d["text"] for e, d in parsed if e == "answer_delta"]
         assert len(deltas) >= 3                      # arrived in pieces, line by line
         assert "".join(deltas) == answer
         assert all(d.endswith("\n") for d in deltas[:-1])
+        # Nothing of the answer is streamed before the weather report is in
+        assert events.index("agent_result") < events.index("answer_delta")
         assert parsed[-1][0] == "complete"
         assert parsed[-1][1]["answer"] == answer
+
+    @pytest.mark.asyncio
+    async def test_premature_answer_is_retracted_when_the_orchestrator_delegates(self, graph_env):
+        """The model answers before gathering anything; the plan guard delegates instead.
+        The client is told to drop the text it already received."""
+        from langchain_core.messages import AIMessage
+
+        import navigo_agent.graph.orchestrator as orchestrator_mod
+        from tests.fakes import StreamingOrchestratorLLM
+
+        answer = "## Tokyo Weather\n\nSunny, 22C."
+        model = StreamingOrchestratorLLM(messages=iter([
+            AIMessage(content="It is probably nice there.\nI did not check.\n"),
+            AIMessage(content=answer),
+        ]))
+        graph_env["extract"].return_value = ("weather", TripSlots(destination="Tokyo"))
+
+        with patch.object(orchestrator_mod, "get_llm", lambda **_: model):
+            parsed = _parse_sse([c async for c in streaming.stream_travel_plan("Weather in Tokyo?")])
+
+        events = [e for e, _ in parsed]
+        assert events.count("answer_reset") == 1
+        reset = events.index("answer_reset")
+        before = "".join(d["text"] for e, d in parsed[:reset] if e == "answer_delta")
+        after = "".join(d["text"] for e, d in parsed[reset:] if e == "answer_delta")
+        assert "I did not check." in before
+        assert after == answer == parsed[-1][1]["answer"]
+        # The sub-agent only starts after the retraction
+        assert reset < events.index("agent_result")

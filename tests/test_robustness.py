@@ -1,23 +1,28 @@
-"""Robustness: supervisor fallback plan, timeouts, forecast coverage, run summary log."""
+"""Robustness: orchestrator plan guard, timeouts, forecast coverage, run summary log."""
 
 import asyncio
 import logging
 import time
 from datetime import date
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 import navigo_agent
 import navigo_agent.graph.agents.weather as weather_mod
-import navigo_agent.graph.supervisor as supervisor_mod
+import navigo_agent.graph.orchestrator as orchestrator_mod
 from navigo_agent.graph.agents import react_utils
 from navigo_agent.graph.agents.weather import forecast_coverage_note
+from navigo_agent.graph.orchestrator import (
+    APOLOGY_ANSWER,
+    default_plan,
+    orchestrator_node,
+)
 from navigo_agent.graph.slots import TripSlots
-from navigo_agent.graph.supervisor import fallback_agents, supervisor_node
 from navigo_agent.session import log_run_summary
 from navigo_agent.state import build_initial_state
+from tests.fakes import tool_call
 
 
 def _state(intent, **extra):
@@ -27,16 +32,27 @@ def _state(intent, **extra):
     return state
 
 
-def _llm(result):
-    llm = AsyncMock()
-    if isinstance(result, Exception):
-        llm.ainvoke.side_effect = result
-    else:
-        llm.ainvoke.return_value = AIMessage(content=result)
+def _llm(*results):
+    """An orchestrator LLM whose calls return (or raise) `results` in order; the last one repeats."""
+    queue = list(results)
+
+    async def _ainvoke(_messages):
+        result = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(result, Exception):
+            raise result
+        return result if isinstance(result, AIMessage) else AIMessage(content=result)
+
+    llm = MagicMock()
+    llm.bind_tools.return_value = llm
+    llm.ainvoke = AsyncMock(side_effect=_ainvoke)
     return llm
 
 
-class TestFallbackPlan:
+def _delegated(update) -> list[str]:
+    return [call["name"] for call in update["messages"][-1].tool_calls]
+
+
+class TestDefaultPlan:
     @pytest.mark.parametrize(
         "intent,expected",
         [
@@ -50,72 +66,107 @@ class TestFallbackPlan:
         ],
     )
     def test_plan_by_intent(self, intent, expected):
-        assert fallback_agents(_state(intent)) == expected
+        assert default_plan(_state(intent)) == expected
 
     def test_completed_agents_are_excluded(self):
         state = _state("full_trip", completed_agents=["flight_agent", "weather_agent"])
-        assert fallback_agents(state) == ["hotel_agent"]
+        assert default_plan(state) == ["hotel_agent"]
 
 
-class TestSupervisorFallback:
-    async def _run(self, llm_result, state):
-        with patch.object(supervisor_mod, "get_llm", lambda **_: _llm(llm_result)):
-            return await supervisor_node(state)
+class TestOrchestratorPlanGuard:
+    async def _run(self, state, *llm_results):
+        llm = _llm(*llm_results)
+        with patch.object(orchestrator_mod, "get_llm", lambda **_: llm):
+            return await orchestrator_node(state), llm
 
     @pytest.mark.asyncio
     async def test_llm_error_uses_default_plan(self):
-        update = await self._run(RuntimeError("rate limited"), _state("weather"))
-        assert update["pending_agents"] == ["weather_agent"]
-        assert update["errors"] == ["supervisor_llm_error: rate limited"]
-        assert "llm_calls" not in update  # the failed call is not counted
+        update, _ = await self._run(_state("weather"), RuntimeError("rate limited"))
+        assert _delegated(update) == ["weather_agent"]
+        assert update["errors"] == ["orchestrator_llm_error: rate limited"]
+        assert update["llm_calls"] == 0  # the failed call is not counted
+        assert update["orchestrator_rounds"] == 1
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("raw", ["I think we should search flights.", "{broken json", ""])
-    async def test_unparseable_output_uses_default_plan(self, raw):
-        update = await self._run(raw, _state("full_trip"))
-        assert update["pending_agents"] == ["flight_agent", "hotel_agent", "weather_agent"]
-        assert update["errors"] == ["supervisor_parse_error"]
-        assert update["llm_calls"] == 1
+    async def test_unusable_output_uses_default_plan(self):
+        """Neither a valid delegation nor an answer: empty text, or only unknown tools."""
+        for response in ("", AIMessage(content="", tool_calls=[tool_call("book_flight")])):
+            update, _ = await self._run(_state("full_trip"), response)
+            assert _delegated(update) == ["flight_agent", "hotel_agent", "weather_agent"]
+            assert update["llm_calls"] == 1
 
     @pytest.mark.asyncio
-    async def test_finalizing_with_no_data_is_overridden(self):
-        raw = '{"reasoning": "done", "next_action": "synthesize_final", "agents_to_dispatch": [], "is_complete": true}'
-        update = await self._run(raw, _state("hotel"))
-        assert update["pending_agents"] == ["hotel_agent"]
-        assert "default plan" in update["supervisor_reasoning"]
-        assert "errors" not in update
+    async def test_answering_with_no_data_is_overridden(self):
+        update, _ = await self._run(_state("hotel"), "Here are some hotels I made up.")
+        assert _delegated(update) == ["hotel_agent"]
+        assert update["messages"][-1].content == ""  # the premature answer is dropped
+        assert update["errors"] == []
 
     @pytest.mark.asyncio
-    async def test_finalizing_after_data_is_respected(self):
-        raw = '{"reasoning": "done", "next_action": "synthesize_final", "agents_to_dispatch": [], "is_complete": true}'
+    async def test_answering_after_data_is_respected(self):
         state = _state("weather", weather_results="sunny", completed_agents=["weather_agent"])
-        update = await self._run(raw, state)
-        assert update["pending_agents"] == []
+        update, llm = await self._run(state, "It is sunny in Tokyo.")
+        assert update["messages"][-1].content == "It is sunny in Tokyo."
+        assert not update["messages"][-1].tool_calls
+        assert "orchestrator_rounds" not in update  # no new delegation round
+        assert llm.ainvoke.await_count == 1  # the decision call's text IS the answer
 
     @pytest.mark.asyncio
-    async def test_general_intent_may_finalize_with_no_data(self):
-        raw = '{"reasoning": "chit-chat", "next_action": "synthesize_final", "agents_to_dispatch": [], "is_complete": true}'
-        update = await self._run(raw, _state("general"))
-        assert update["pending_agents"] == []
+    async def test_general_intent_may_answer_with_no_data(self):
+        update, _ = await self._run(_state("general"), "Hello! Where would you like to go?")
+        assert update["messages"][-1].content == "Hello! Where would you like to go?"
 
     @pytest.mark.asyncio
-    async def test_failed_agent_is_not_retried_by_fallback(self):
-        """After the only planned agent ran (even if it failed), fallback has nothing left."""
-        state = _state("weather", completed_agents=["weather_agent"], weather_results="")
-        update = await self._run(RuntimeError("down"), state)
-        assert update["pending_agents"] == []
+    async def test_failed_decision_falls_through_to_a_tool_free_answer(self):
+        """After the only planned agent ran, a failed decision call has nothing left to delegate."""
+        state = _state("weather", completed_agents=["weather_agent"], weather_results="unavailable")
+        update, llm = await self._run(state, RuntimeError("tool_use_failed"), "No weather data, sorry.")
+        assert update["messages"][-1].content == "No weather data, sorry."
+        assert update["errors"] == ["orchestrator_llm_error: tool_use_failed"]
+        assert update["llm_calls"] == 1
+        assert llm.bind_tools.call_args.kwargs == {"tool_choice": "none"}
 
     @pytest.mark.asyncio
-    async def test_supervisor_outage_still_produces_a_plan_end_to_end(self, graph_env):
-        """With the supervisor LLM down for the whole run, the graph still gathers data."""
+    async def test_total_outage_ends_with_an_apology_not_a_crash(self):
+        state = _state("weather", completed_agents=["weather_agent"], weather_results="unavailable")
+        update, _ = await self._run(state, RuntimeError("down"))
+        assert update["messages"][-1].content == APOLOGY_ANSWER
+        assert update["errors"] == ["orchestrator_llm_error: down", "orchestrator_final_answer: down"]
+        assert update["llm_calls"] == 0
+
+    @pytest.mark.asyncio
+    async def test_round_budget_stops_delegation(self, monkeypatch):
+        monkeypatch.setattr(orchestrator_mod, "MAX_ORCHESTRATOR_ROUNDS", 1)
+        state = _state("weather", weather_results="sunny", completed_agents=["weather_agent"],
+                       orchestrator_rounds=1)
+        update, llm = await self._run(state, AIMessage(content="", tool_calls=[tool_call("hotel_agent")]), "done")
+        # The only call made has tools switched off — the model cannot delegate again.
+        assert llm.bind_tools.call_args_list[-1].kwargs == {"tool_choice": "none"}
+        assert not update["messages"][-1].tool_calls
+
+    @pytest.mark.asyncio
+    async def test_broken_tool_calling_still_produces_a_plan_end_to_end(self, graph_env):
+        """Every tool-calling request fails; plain completions work. The plan guard gathers
+        the data and the orchestrator still writes the answer."""
+
+        class _NoToolCalling:
+            def bind_tools(self, _tools, tool_choice=None):
+                bound = AsyncMock()
+                if tool_choice == "none":
+                    bound.ainvoke.return_value = AIMessage(content="PLAN FROM REPORTS")
+                else:
+                    bound.ainvoke.side_effect = RuntimeError("tool_use_failed")
+                return bound
+
         graph_env["extract"].return_value = ("full_trip", TripSlots(destination="Tokyo", duration_days=5))
-        with patch.object(supervisor_mod, "get_llm", lambda **_: _llm(RuntimeError("supervisor down"))):
+        with patch.object(orchestrator_mod, "get_llm", lambda **_: _NoToolCalling()):
             result = await navigo_agent.run_travel_agent("Plan a 5-day trip to Tokyo")
         assert result["flight_results"] == "FLIGHTS"
         assert result["hotel_results"] == "HOTELS"
         assert "sunny" in result["weather_results"]
         assert result["itinerary"] == "ITINERARY"
-        assert result["answer"] == "FINAL PLAN"
+        assert result["answer"] == "PLAN FROM REPORTS"
+        assert result["errors"] == ["orchestrator_llm_error: tool_use_failed"] * 2
 
 
 class _OneSearchLLM:
@@ -229,6 +280,6 @@ class TestRunSummaryLog:
         assert len(summaries) == 1
         assert summaries[0].thread_id == result["thread_id"]
         assert summaries[0].outcome == "completed"
-        # (the fixture's scripted supervisor always dispatches all three data agents)
+        # (the fixture's orchestrator always delegates to all three research agents)
         assert "weather_agent" in summaries[0].agents
         assert summaries[0].llm_calls == result["llm_calls"]

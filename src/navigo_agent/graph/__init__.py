@@ -1,4 +1,4 @@
-"""Navigo-Agent graph: supervisor-orchestrated multi-agent travel planning."""
+"""Navigo-Agent graph: one orchestrator agent delegating to specialist sub-agents."""
 
 __all__ = ["build_travel_graph", "get_compiled_graph"]
 

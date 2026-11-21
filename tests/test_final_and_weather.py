@@ -1,4 +1,4 @@
-"""Final-answer prompt shaping, daily forecast summary, CORS."""
+"""The orchestrator's request brief (answer shaping), daily forecast summary, CORS."""
 
 from unittest.mock import MagicMock, patch
 
@@ -6,7 +6,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from navigo_agent.graph.agents.final import build_final_prompt
+from navigo_agent.graph.orchestrator import (
+    build_orchestrator_messages,
+    build_request_brief,
+)
 from navigo_agent.mcp import weather_server
 from navigo_agent.middleware import configure_cors
 from navigo_agent.state import build_initial_state
@@ -19,28 +22,58 @@ def _state(intent, **results):
     return state
 
 
-class TestFinalPrompt:
+class TestRequestBrief:
     @pytest.mark.parametrize("intent", ["weather", "flights", "flight", "hotel", "general"])
     def test_single_topic_gets_focused_answer(self, intent):
-        prompt = build_final_prompt(_state(intent, weather_results="Sunny, 22C"))
-        assert "Weather Results: Sunny, 22C" in prompt
-        assert "Do NOT add sections" in prompt
-        # No plan template, and no empty placeholders for data nobody asked for
-        assert "Day-by-Day Itinerary" not in prompt
-        assert "Flight Results" not in prompt
-        assert "Hotel Results" not in prompt
+        brief = build_request_brief(_state(intent, weather_results="Sunny, 22C", completed_agents=["weather_agent"]))
+        assert f"- Intent: {intent}" in brief
+        assert "Do NOT add sections" in brief
+        # No plan template for a single-topic question
+        assert "Day-by-Day Itinerary" not in brief
+        assert "Trip Summary" not in brief
+        # Reports travel as ToolMessages — the brief only tracks who has reported
+        assert "Sunny, 22C" not in brief
+        assert "Reports received from: weather_agent" in brief
+        assert "Sub-agents not used yet: flight_agent, hotel_agent, itinerary_agent" in brief
 
     @pytest.mark.parametrize("intent", ["full_trip", "itinerary"])
     def test_trip_gets_full_plan_and_flags_missing_data(self, intent):
-        prompt = build_final_prompt(_state(intent, flight_results="ANA", itinerary="Day 1"))
-        assert "1. Trip Summary" in prompt
-        assert "5. Day-by-Day Itinerary" in prompt
-        assert "Flight Results: ANA" in prompt
-        assert "Hotel Results: No data available." in prompt
+        brief = build_request_brief(_state(intent, flight_results="ANA", itinerary="Day 1"))
+        assert "1. Trip Summary" in brief
+        assert "5. Day-by-Day Itinerary" in brief
+        assert "say the information was unavailable rather than fabricating it" in brief
+        assert "Do NOT add sections" not in brief
 
-    def test_no_data_at_all(self):
-        prompt = build_final_prompt(_state("general"))
-        assert "No data was gathered" in prompt
+    def test_progress_and_problems_are_reported(self):
+        state = _state("full_trip", errors=["hotel_agent(search): timed out after 30s"], orchestrator_rounds=1)
+        brief = build_request_brief(state)
+        assert "Reports received from: none yet" in brief
+        assert "Delegation rounds used: 1 of 3" in brief
+        assert "Problems so far: hotel_agent(search): timed out after 30s" in brief
+        assert "Problems so far: none" in build_request_brief(_state("general"))
+
+    def test_conversation_is_system_brief_then_transcript(self):
+        from langchain_core.messages import (
+            AIMessage,
+            HumanMessage,
+            SystemMessage,
+            ToolMessage,
+        )
+
+        state = _state("weather")
+        call = {"name": "weather_agent", "args": {"city": "Tokyo"}, "id": "c1", "type": "tool_call"}
+        state["messages"] += [
+            HumanMessage(content="a clarification reply"),      # user turns are in the brief, not repeated
+            AIMessage(content="", tool_calls=[call]),
+            ToolMessage(content="Sunny, 22C", tool_call_id="c1", name="weather_agent"),
+        ]
+        system, brief, delegation, report = build_orchestrator_messages(state)
+        assert isinstance(system, SystemMessage)
+        for agent in ("flight_agent", "hotel_agent", "weather_agent", "itinerary_agent"):
+            assert f"- {agent}: " in system.content
+        assert isinstance(brief, HumanMessage) and "## User Request" in brief.content
+        assert delegation.tool_calls[0]["name"] == "weather_agent"
+        assert report.content == "Sunny, 22C"
 
 
 def _entry(dt, temp, lo, hi, desc):
