@@ -1,12 +1,20 @@
-"""Graph builder: constructs the supervisor-driven LangGraph state graph.
+"""Graph builder: constructs the orchestrator-driven LangGraph state graph.
 
 Architecture:
-  START → intent_classifier → clarify (may pause to ask the user) → supervisor → [conditional routing]
-      ├── flight_agent    ──┐
-      ├── hotel_agent     ──┤ parallel fan-out (same superstep) → back to supervisor
-      ├── weather_agent   ──┘ (max 3 supervisor rounds)
-      ├── itinerary_agent ──→ final_synthesizer   (needs flight+hotel+weather data)
-      └── final_synthesizer → END
+  START → intent_classifier → prepare_clarification → clarify (may pause to ask the user)
+        → orchestrator ◄──────────────── reports (ToolMessages) ───────────────┐
+              │                                                                │
+              ├─ tool calls → Send() fan-out, one superstep:                   │
+              │      flight_agent ─┐                                           │
+              │      hotel_agent  ─┼───────────────────────────────────────────┤
+              │      weather_agent ┘                                           │
+              │      itinerary_agent (a later round: builds on those reports) ─┘
+              │
+              └─ no tool calls → its message is the final answer → END
+
+The orchestrator is the main agent: the only node that decides what runs, and
+the one that writes the answer. Sub-agents never route — they always report
+back to it.
 """
 
 import asyncio
@@ -20,19 +28,13 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from navigo_agent.config import DATABASE_URL, get_checkpointer_dsn
-from navigo_agent.graph.agents.final import final_synthesizer
-from navigo_agent.graph.agents.flight import flight_agent
-from navigo_agent.graph.agents.hotel import hotel_agent
-from navigo_agent.graph.agents.itinerary import itinerary_agent
-from navigo_agent.graph.agents.weather import weather_agent
-from navigo_agent.graph.routing import (
-    PARALLEL_AGENTS,
+from navigo_agent.graph.agents import SUBAGENT_NODES
+from navigo_agent.graph.intake import (
     clarify_node,
     intent_classifier,
     prepare_clarification,
-    route_after_supervisor,
 )
-from navigo_agent.graph.supervisor import supervisor_node
+from navigo_agent.graph.orchestrator import orchestrator_node, route_after_orchestrator
 from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
@@ -41,56 +43,38 @@ logger = logging.getLogger(__name__)
 # ── Graph Construction ───────────────────────────────────────────────
 
 def build_travel_graph() -> StateGraph:
-    """Build and return the compiled supervisor-orchestrated travel graph.
+    """Build and return the (uncompiled) orchestrator-driven travel graph.
 
     Does NOT compile with checkpointer — that happens separately so
     tests can use MemorySaver.
     """
     graph = StateGraph(TravelState)
 
-    # ── Add nodes ────────────────────────────────────────────────────
+    # ── Intake: understand the request, ask if essentials are missing ──
     graph.add_node("intent_classifier", intent_classifier)
     graph.add_node("prepare_clarification", prepare_clarification)
     graph.add_node("clarify", clarify_node)
-    graph.add_node("supervisor", supervisor_node)
-    graph.add_node("flight_agent", flight_agent)
-    graph.add_node("hotel_agent", hotel_agent)
-    graph.add_node("weather_agent", weather_agent)
-    graph.add_node("itinerary_agent", itinerary_agent)
-    graph.add_node("final_synthesizer", final_synthesizer)
-
-    # ── Edges ────────────────────────────────────────────────────────
-    # Entry: always classify intent first
     graph.add_edge(START, "intent_classifier")
-
-    # Intent + slots → clarify (interrupts if essentials are missing) → Supervisor
     graph.add_edge("intent_classifier", "prepare_clarification")
     graph.add_edge("prepare_clarification", "clarify")
-    graph.add_edge("clarify", "supervisor")
+    graph.add_edge("clarify", "orchestrator")
 
-    # Supervisor → Conditional: one node, or a list of nodes to run in parallel
+    # ── Main agent ───────────────────────────────────────────────────
+    graph.add_node("orchestrator", orchestrator_node)
+
+    # Tool calls → one Send per delegated sub-agent; no tool calls → END.
     graph.add_conditional_edges(
-        "supervisor",
-        route_after_supervisor,
-        {
-            "flight_agent": "flight_agent",
-            "hotel_agent": "hotel_agent",
-            "weather_agent": "weather_agent",
-            "itinerary_agent": "itinerary_agent",
-            "final_synthesizer": "final_synthesizer",
-        },
+        "orchestrator",
+        route_after_orchestrator,
+        [*SUBAGENT_NODES, END],
     )
 
-    # Data agents fan in to the supervisor. When several run in parallel the
-    # supervisor is triggered ONCE, after the whole batch has finished.
-    for agent_node in PARALLEL_AGENTS:
-        graph.add_edge(agent_node, "supervisor")
-
-    # The itinerary is the last data-producing step — nothing left to decide.
-    graph.add_edge("itinerary_agent", "final_synthesizer")
-
-    # Final synthesizer → END
-    graph.add_edge("final_synthesizer", END)
+    # ── Sub-agents: every one of them reports back to the orchestrator ──
+    # When several run in parallel the orchestrator is triggered ONCE, after
+    # the whole round has finished.
+    for name, node in SUBAGENT_NODES.items():
+        graph.add_node(name, node)
+        graph.add_edge(name, "orchestrator")
 
     return graph
 

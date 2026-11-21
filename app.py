@@ -44,7 +44,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="Navigo AI",
-    description="LangGraph Multi-Agent Travel Planner with Supervisor, Guardrails, and MCP Integration",
+    description="LangGraph Multi-Agent Travel Planner with an Orchestrator Agent, Guardrails, and MCP Integration",
     version="0.3.0",
     lifespan=lifespan,
 )
@@ -78,7 +78,7 @@ async def travel_planner(request: Request, request_data: TravelRequest):
 
     Pipeline:
       1. Guard input (length, injection, PII, topic)
-      2. Invoke LangGraph supervisor pipeline
+      2. Invoke the LangGraph orchestrator graph
       3. Guard output (HTML strip, sensitive redaction)
       4. Return structured JSON with per-agent results
     """
@@ -161,6 +161,7 @@ async def travel_planner_stream(request: Request, request_data: TravelRequest):
       - progress: {agent, display, icon, status: started|completed}
       - agent_result: partial result from a completed agent
       - answer_delta: {text} — next line(s) of the final answer while it is written
+      - answer_reset: {} — discard the answer_delta text so far (the orchestrator delegated instead)
       - complete: {thread_id, answer, ...}
       - clarification: {thread_id, question, missing} — reply with the same thread_id
       - error: {message, thread_id}

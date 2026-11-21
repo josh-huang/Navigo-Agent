@@ -211,12 +211,11 @@ function startNewTrip() {
 
 var AGENT_META = {
     intent_classifier:  { icon: "🤔", label: "Analysing request" },
-    supervisor:         { icon: "🧠", label: "Planning next steps" },
+    orchestrator:       { icon: "🧠", label: "Orchestrating your trip" },
     flight_agent:       { icon: "✈️", label: "Searching flights" },
     hotel_agent:        { icon: "🏨", label: "Finding hotels" },
     weather_agent:      { icon: "🌤️", label: "Checking weather" },
     itinerary_agent:    { icon: "🗺️", label: "Building itinerary" },
-    final_synthesizer:  { icon: "✨", label: "Finalising plan" },
 };
 
 function showProgressSection() {
@@ -252,7 +251,7 @@ function updateProgressItem(agentKey, status) {
         var statusEl = existing.querySelector(".progress-item__status");
         if (statusEl) {
             statusEl.textContent = status;
-            // toggle(…, force): a node can run again (the supervisor does)
+            // toggle(…, force): a node can run again (the orchestrator does, once per round)
             statusEl.classList.toggle("progress-item__status--running", status !== "Done ✅");
         }
     } else {
@@ -297,6 +296,16 @@ var streamedAnswer = "";
 
 function resetStreamedAnswer() {
     streamedAnswer = "";
+}
+
+/** The orchestrator went on to delegate: what was streamed was not the answer. */
+function discardStreamedAnswer() {
+    if (streamedAnswer === "") return;
+    streamedAnswer = "";
+    var resultBox = $("resultBox");
+    if (resultBox) resultBox.innerHTML = "";
+    var threadInfo = $("threadInfo");
+    if (threadInfo) threadInfo.textContent = "Gathering more information…";
 }
 
 /** Append streamed text and re-render. The `complete` event replaces it all. */
@@ -468,6 +477,10 @@ function sendMessageStream() {
                 appendAnswerDelta(data.text);
                 break;
 
+            case "answer_reset":
+                discardStreamedAnswer();
+                break;
+
             case "complete":
                 // { thread_id, answer, flight_results, hotel_results, weather_results, itinerary, llm_calls }
                 showResult(data.answer, data.thread_id, data);
@@ -513,7 +526,7 @@ function sendMessageLegacy() {
     showProgressSection();
 
     addProgressItem("intent_classifier", "Analyzing…");
-    addProgressItem("supervisor", "Planning…");
+    addProgressItem("orchestrator", "Orchestrating…");
 
     fetch("/api/travel", {
         method: "POST",
@@ -537,14 +550,13 @@ function sendMessageLegacy() {
             currentThreadId = data.thread_id;
 
             updateProgressItem("intent_classifier", "Done ✅");
-            updateProgressItem("supervisor", "Done ✅");
 
             var agentsRan = [];
             if (data.flight_results)  agentsRan.push("flight_agent");
             if (data.hotel_results)   agentsRan.push("hotel_agent");
             if (data.weather_results) agentsRan.push("weather_agent");
             if (data.itinerary)       agentsRan.push("itinerary_agent");
-            agentsRan.push("final_synthesizer");
+            agentsRan.push("orchestrator");
 
             for (var i = 0; i < agentsRan.length; i++) {
                 updateProgressItem(agentsRan[i], "Done ✅");

@@ -1,7 +1,11 @@
-"""Intent classification and conditional routing for the supervisor graph.
+"""Intake: what happens before the orchestrator takes over.
 
 Intent classifier: first node — determines user intent and extracts trip slots.
-Routing functions: conditional edges driven by supervisor decisions.
+Clarification: pauses the run (LangGraph interrupt) when essentials are missing.
+
+Both are deterministic pre-processing on purpose. The orchestrator then starts
+from a request it can act on: typed slots, a known intent and — if the user
+had to be asked — their reply already merged in.
 """
 
 import logging
@@ -19,7 +23,6 @@ from navigo_agent.graph.slots import (
     merge_slots,
     missing_required_slots,
 )
-from navigo_agent.graph.supervisor import VALID_AGENT_NODES, _normalize_agent_name
 from navigo_agent.state import TravelState
 
 logger = logging.getLogger(__name__)
@@ -37,9 +40,6 @@ INTENT_PATTERNS: list[tuple[str, re.Pattern]] = [
         r"\b(hotels?|motels?|hostels?|airbnb|accommodations?|lodging|stay|resorts?|inns?)\b", re.IGNORECASE
     )),
 ]
-
-# Intents for which an itinerary is generated automatically once data is in
-ITINERARY_INTENTS = frozenset({"full_trip", "itinerary"})
 
 TRIP_PLANNING_KEYWORDS = [
     "plan", "trip", "travel", "visit", "vacation", "holiday",
@@ -124,7 +124,7 @@ async def intent_classifier(state: TravelState) -> dict:
         "trip": trip,
         "history": history,
         "extracted_destination": trip.get("destination"),
-        "supervisor_loop_count": 0,
+        "orchestrator_rounds": 0,
         "llm_calls": 1,
     }
 
@@ -189,57 +189,3 @@ async def clarify_node(state: TravelState) -> dict:
         "extracted_destination": trip.get("destination"),
         "llm_calls": 1,
     }
-
-
-# ── Routing Functions (for conditional edges) ────────────────────────
-
-# Agents that gather independent data and can safely run side by side.
-PARALLEL_AGENTS = ("flight_agent", "hotel_agent", "weather_agent")
-
-
-def _valid_pending(pending: list[str]) -> list[str]:
-    """Normalize + validate the supervisor's dispatch list (order kept, no dupes)."""
-    valid: list[str] = []
-    for agent in pending:
-        normalized = _normalize_agent_name(agent)
-        if normalized not in VALID_AGENT_NODES:
-            logger.warning("Skipping invalid agent name '%s' — not a valid graph node.", agent)
-        elif normalized not in valid:
-            valid.append(normalized)
-    return valid
-
-
-def route_after_supervisor(state: TravelState) -> str | list[str]:
-    """Fan out to the supervisor's dispatch batch.
-
-    Returns a LIST of node names when several data agents are dispatched —
-    LangGraph runs them concurrently in one superstep and the graph only
-    returns to the supervisor once all of them have finished.
-
-    itinerary_agent consumes the data agents' output, so it never runs in the
-    same batch as them: it is deferred until their results are in.
-    """
-    pending = _valid_pending(state.get("pending_agents", []))
-
-    data_agents = [a for a in pending if a in PARALLEL_AGENTS]
-    if data_agents:
-        logger.info("Dispatching in parallel: %s", data_agents)
-        return data_agents
-
-    if "itinerary_agent" in pending:
-        return "itinerary_agent"
-
-    # Nothing (valid) dispatched. Only trip-planning intents get an automatic
-    # itinerary; single-topic queries (weather / flights / hotel) go straight
-    # to the final answer unless the supervisor explicitly dispatched it.
-    if state.get("user_intent") not in ITINERARY_INTENTS:
-        return "final_synthesizer"
-
-    has_data = bool(state.get("flight_results") or state.get("hotel_results") or state.get("weather_results"))
-    has_itinerary = bool(state.get("itinerary"))
-    completed = state.get("completed_agents", [])
-
-    if has_data and not has_itinerary and "itinerary_agent" not in completed:
-        return "itinerary_agent"
-
-    return "final_synthesizer"

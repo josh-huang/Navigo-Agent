@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from langchain_core.messages import AIMessage
 
-import navigo_agent.graph.routing as routing_mod
+import navigo_agent.graph.intake as intake_mod
 import navigo_agent.graph.slots as slots_mod
 from navigo_agent.graph.slots import (
     TripSlots,
@@ -115,8 +115,8 @@ class TestFormatTripDetails:
 
 class TestIntentClassifierNode:
     async def _run(self, query, extraction):
-        with patch.object(routing_mod, "extract_trip_request", AsyncMock(return_value=extraction)):
-            return await routing_mod.intent_classifier(build_initial_state(query))
+        with patch.object(intake_mod, "extract_trip_request", AsyncMock(return_value=extraction)):
+            return await intake_mod.intent_classifier(build_initial_state(query))
 
     @pytest.mark.asyncio
     async def test_fast_path_intent_wins_but_slots_still_extracted(self):

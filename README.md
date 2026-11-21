@@ -1,36 +1,46 @@
 # Navigo-Agent
 
-AI-powered multi-agent travel planner built on LangGraph with Supervisor routing, ReAct agent loops, MCP tool integration, and production-grade guardrails.
+AI-powered multi-agent travel planner built on LangGraph: a main orchestrator agent that delegates to specialist sub-agents, ReAct agent loops, MCP tool integration, and production-grade guardrails.
 
 ## Architecture
 
 ```
 User → FastAPI → Input Guard → LangGraph StateGraph
-                                    ├── Intent Classifier + Trip Slot Extraction (1 LLM call)
-                                    ├── Clarify (pauses to ask the user if essentials are missing)
-                                    ├── Supervisor Agent (LLM JSON routing, max 3 loops)
-                                    ├── ✈️ Flight Agent (ReAct over Tavily web search)   ┐
-                                    ├── 🏨 Hotel Agent  (ReAct over Tavily web search)   ├ run in parallel
-                                    ├── 🌤️ Weather Agent (OpenWeather MCP)               ┘
-                                    ├── 🗺️ Itinerary Agent (ReAct over Tavily + peer data)
-                                    └── ✨ Final Synthesizer (polished output)
-                                          ↓
-                                    Output Guard → JSON Response / SSE Stream
+                                 │
+                                 ├── Intake
+                                 │     ├── Intent Classifier + Trip Slot Extraction (1 LLM call)
+                                 │     └── Clarify (pauses to ask the user if essentials are missing)
+                                 │
+                                 └── 🧠 Orchestrator — the main agent (tool-calling loop)
+                                       │   decides what is needed · delegates · reads the reports · writes the answer
+                                       │
+                                       │ tool calls = delegations (LangGraph Send, parallel)
+                                       ├──► ✈️ Flight Agent    (ReAct over Tavily web search)  ┐
+                                       ├──► 🏨 Hotel Agent     (ReAct over Tavily web search)  ├ one round, in parallel
+                                       ├──► 🌤️ Weather Agent   (OpenWeather MCP)               ┘
+                                       ├──► 🗺️ Itinerary Agent (ReAct over Tavily + the reports above) — a later round
+                                       │ ◄── every sub-agent reports back as a ToolMessage
+                                       │
+                                       └── final answer (streamed) → Output Guard → JSON Response / SSE Stream
 ```
+
+A full trip takes three orchestrator turns: delegate research (flight + hotel + weather in parallel) → delegate the itinerary → write the plan. A weather question takes two: delegate to the weather agent → answer.
 
 **Key Design Decisions:**
 
 - **ReAct Multi-Hop Search (native tool calling)**: Each search agent gets a `web_search` tool via `bind_tools()` and runs up to 3 rounds of Reason → Search → Observe. Final answers are plain markdown, not JSON-wrapped. If a tool-calling request fails, the agent falls back to a tool-free answer.
-- **Structured trip slots**: One LLM call at graph entry extracts intent plus origin, destination, dates, duration, travelers, budget and interests; every agent receives them.
+- **Structured trip slots**: One LLM call at graph entry extracts intent plus origin, destination, dates, duration, travelers, budget and interests; the orchestrator and every sub-agent receive them.
 - **Clarification (human-in-the-loop)**: If essentials are missing (destination; origin for flight queries; trip length for trip plans), the graph pauses with a LangGraph `interrupt()` and asks once. The reply resumes the same thread via the Postgres checkpointer.
 - **Multi-turn conversations**: Sending the `thread_id` of a finished turn makes the next message a follow-up ("make it cheaper", "add 2 days"). The previous turns and trip slots are carried into a fresh run; the extractor decides whether the message really continues the conversation or starts a new topic.
-- **Parallel dispatch**: Flight, hotel and weather agents run concurrently in one superstep and fan in to the supervisor.
-- **Supervisor JSON routing**: the supervisor uses prompt-engineered JSON output with Pydantic parsing and a safe fallback.
+- **One main agent, sub-agents as tools**: the orchestrator is the only node that decides what runs. Each sub-agent is exposed to it as a tool (`bind_tools()`); a tool call is a delegation with a task brief, and the tool result is the sub-agent's report. Sub-agents never route — they always report back. When the orchestrator stops calling tools, its reply is the final answer (there is no separate synthesizer).
+- **Parallel delegation**: every tool call of a turn becomes a LangGraph `Send`, so the sub-agents of one round run concurrently in one superstep and fan in to the orchestrator once.
+- **Plan guard**: the model decides, but a small deterministic guard keeps a bad decision from becoming a bad answer — if a tool-calling request fails, or the model answers before anything was gathered, the default plan for the intent is delegated; a trip always gets its itinerary; each sub-agent runs at most once and delegation rounds are capped.
+- **One registry**: `agents/delegation.py` lists the sub-agents once; the orchestrator's tools, the graph's nodes and the stream's per-agent results are all derived from it.
 - **Shared ReAct infrastructure**: `react_utils.py` provides a generic `run_react_loop()` used by flight, hotel, and itinerary agents — DRY, testable, and extensible.
 - **Guardrails**: Input guard (length, injection detection, PII scanning, topic boundary) + Output guard (HTML strip, sensitive redaction, content safety).
-- **SSE Streaming**: Real-time agent progress via `POST /api/travel/stream` — each agent reports `started` and `completed`, so the UI shows which agents are running in parallel.
+- **SSE Streaming**: Real-time agent progress via `POST /api/travel/stream` — each agent reports `started` and `completed`, so the UI shows which agents are running in parallel, and the orchestrator's final answer is streamed line by line as it is written.
 - **Checkpointer lifecycle**: A Postgres connection pool is opened in FastAPI's lifespan (nothing connects at import time). Without `DATABASE_URL` the app falls back to an in-memory checkpointer, so it runs locally with no database.
-- **Answer shaped by intent**: Trip requests get the full sectioned plan; single-topic questions (weather, flights, hotels) get a focused answer.
+- **Answer shaped by intent**: Trip requests get the full sectioned plan; single-topic questions (weather, flights, hotels) get a focused answer. General travel questions can be answered by the orchestrator directly, without any sub-agent.
 
 ## Tech Stack
 
@@ -72,15 +82,16 @@ Navigo-Agent/
 │   │   └── weather_server.py      #     Custom Weather MCP Server (OpenWeather)
 │   ├── graph/                     #   LangGraph orchestration
 │   │   ├── builder.py             #     StateGraph construction, checkpointing
-│   │   ├── supervisor.py          #     Supervisor node (JSON routing decisions)
-│   │   ├── routing.py             #     Intent classifier + conditional routing
-│   │   └── agents/                #     Specialized sub-agents
+│   │   ├── orchestrator.py        #     Main agent: delegation loop, plan guard, final answer
+│   │   ├── intake.py              #     Intent classifier + clarification (before the orchestrator)
+│   │   ├── slots.py               #     Trip slot extraction, history, clarification questions
+│   │   └── agents/                #     Sub-agents the orchestrator delegates to
+│   │       ├── delegation.py      #       Sub-agent registry + delegation/report contract
 │   │       ├── react_utils.py     #       Shared ReAct loop infrastructure
 │   │       ├── flight.py          #       Flight agent (ReAct)
 │   │       ├── hotel.py           #       Hotel agent (ReAct)
 │   │       ├── weather.py         #       Weather agent
-│   │       ├── itinerary.py       #       Itinerary agent (ReAct)
-│   │       └── final.py           #       Final synthesizer
+│   │       └── itinerary.py       #       Itinerary agent (ReAct)
 │   ├── evaluation/                #   LLM-as-Judge evaluation harness
 │   │   ├── evaluator.py           #     Eval runner + LLM quality scoring
 │   │   └── test_cases.py          #     11 curated test cases
@@ -220,6 +231,9 @@ Same request body as `/api/travel`. Returns `text/event-stream`:
 
 ```
 event: progress
+data: {"agent":"orchestrator","display":"Orchestrating your trip","icon":"🧠","status":"completed"}
+
+event: progress
 data: {"agent":"weather_agent","display":"Checking weather","icon":"🌤️","status":"started"}
 
 event: progress
@@ -238,7 +252,7 @@ event: complete
 data: {"thread_id":"user_abc123...","answer":"## Trip Summary\n...","llm_calls":5}
 ```
 
-`answer_delta` events carry the final answer line by line while it is being written (each line passes the output guard first). The `complete` event carries the full answer and replaces what was streamed.
+The `orchestrator` reports `started`/`completed` once per turn of its loop. `answer_delta` events carry its final answer line by line while it is being written (each line passes the output guard first). If the orchestrator turns out to delegate more work after text was streamed, an `answer_reset` event tells the client to discard that text. The `complete` event carries the full answer and replaces what was streamed.
 
 When the agent needs more information the stream ends with a `clarification` event instead of `complete`:
 
@@ -291,7 +305,7 @@ uv run python -m navigo_agent.evaluation.evaluator --output eval.json
 
 The evaluator measures:
 - **Intent accuracy**: did the classifier pick the expected intent?
-- **Tool accuracy**: did the right specialist agents run?
+- **Tool accuracy**: did the orchestrator delegate to the right sub-agents?
 - **Quality score**: LLM-judged relevance, completeness, faithfulness (1-5). Completeness is judged against what the query asked for, so a weather-only answer is not marked down for having no itinerary.
 - **Latency**: end-to-end response time
 - **Error handling**: graceful degradation vs crash

@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage
 import navigo_agent
 import navigo_agent.graph.slots as slots_mod
 from navigo_agent import middleware
-from navigo_agent.graph.agents.final import build_final_prompt
+from navigo_agent.graph.orchestrator import build_request_brief
 from navigo_agent.graph.slots import (
     TripSlots,
     format_trip_details,
@@ -140,10 +140,10 @@ class TestLanguage:
             "Write the answer in the same language as the user's query."
         )
 
-    def test_other_language_is_named_in_final_prompt(self):
+    def test_other_language_is_named_in_the_request_brief(self):
         state = build_initial_state("东京天气怎么样")
         state.update(user_intent="weather", weather_results="Sunny", trip={"language": "Chinese"})
-        assert "Write the entire answer in Chinese" in build_final_prompt(state)
+        assert "Write the entire answer in Chinese" in build_request_brief(state)
 
     @pytest.mark.asyncio
     async def test_localise_question_skips_llm_for_english(self):
@@ -174,14 +174,14 @@ class TestLanguage:
 
     @pytest.mark.asyncio
     async def test_clarification_is_asked_in_the_users_language_once(self, graph_env):
-        import navigo_agent.graph.routing as routing_mod
+        import navigo_agent.graph.intake as intake_mod
 
         graph_env["extract"].side_effect = [
             ("weather", TripSlots(language="Chinese")),
             ("weather", TripSlots(destination="Tokyo", language="Chinese")),
         ]
         translate = AsyncMock(return_value="您想去哪里？")
-        with patch.object(routing_mod, "localise_question", translate):
+        with patch.object(intake_mod, "localise_question", translate):
             first = await navigo_agent.run_travel_agent("天气怎么样？")
             assert first["needs_clarification"] is True
             assert first["question"] == "您想去哪里？"
@@ -192,4 +192,4 @@ class TestLanguage:
         # Translated once — not again when the paused node re-ran on resume
         assert translate.await_count == 1
         assert translate.await_args.args[1] == "Chinese"
-        assert "Write the entire answer in Chinese" in graph_env["final_prompts"][-1]
+        assert "Write the entire answer in Chinese" in graph_env["answer_prompts"][-1]

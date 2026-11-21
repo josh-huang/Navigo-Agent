@@ -31,7 +31,7 @@ if LANGCHAIN_TRACING_V2 and LANGCHAIN_API_KEY:
     os.environ["LANGCHAIN_PROJECT"] = LANGCHAIN_PROJECT
 
 # ── Constants ─────────────────────────────────────────────────────────
-MAX_SUPERVISOR_LOOPS = 3
+MAX_ORCHESTRATOR_ROUNDS = 3  # delegation rounds the orchestrator may issue per request
 MAX_INPUT_LENGTH = 1000
 LLM_MODEL = "llama-3.3-70b-versatile"
 LLM_TEMPERATURE = 0.3
@@ -52,7 +52,7 @@ def get_llm(
     Parameters are configurable so sub-agents can tune for their task:
       - flight_agent: default temp (factual, no creativity needed)
       - itinerary_agent: higher temp (0.5) for creative planning
-      - supervisor: low temp (0.1) for deterministic routing
+      - orchestrator: low temp (0.2) for steady delegation decisions
     """
     from langchain_groq import ChatGroq
 

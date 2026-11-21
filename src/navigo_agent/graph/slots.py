@@ -223,7 +223,7 @@ def format_history(history: list[dict[str, str]] | None, *, answer_chars: int = 
     """Render earlier turns for a prompt. Empty string when there is no history.
 
     Answers are cut to `answer_chars` — agents need the gist of what was said,
-    the final synthesizer asks for more so it can revise the previous plan.
+    the orchestrator asks for more so it can revise the previous plan.
     """
     lines: list[str] = []
     for turn in history or []:
@@ -273,7 +273,7 @@ def format_trip_details(trip: dict | None) -> str:
     return "\n".join(lines)
 
 
-# ── Clarification: which slots must be known before agents are dispatched ──
+# ── Clarification: which slots must be known before the orchestrator starts ──
 
 SLOT_QUESTIONS = {
     "destination": "Where would you like to go?",
