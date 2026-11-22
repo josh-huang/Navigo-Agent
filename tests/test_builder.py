@@ -1,5 +1,7 @@
 """Checkpointer lifecycle tests — no database needed."""
 
+import asyncio
+
 import pytest
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -51,8 +53,7 @@ def test_graph_compiles_without_init():
     assert builder.get_compiled_graph() is graph
 
 
-@pytest.mark.asyncio
-async def test_unreachable_database_fails_fast(monkeypatch):
+def test_unreachable_database_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
     """A configured but unreachable database is a deploy error, not a silent fallback."""
     monkeypatch.setattr(builder, "DATABASE_URL", "postgresql://u:p@127.0.0.1:1/db")
     monkeypatch.setattr(builder, "get_checkpointer_dsn", lambda: "postgresql://u:p@127.0.0.1:1/db")
@@ -69,7 +70,7 @@ async def test_unreachable_database_fails_fast(monkeypatch):
 
     monkeypatch.setattr(builder, "AsyncConnectionPool", FailingPool)
     with pytest.raises(ConnectionError):
-        await builder.init_checkpointer()
+        asyncio.run(builder.init_checkpointer(), loop_factory=asyncio.SelectorEventLoop)
     assert builder._checkpointer is None
     assert builder._pool is None
 
