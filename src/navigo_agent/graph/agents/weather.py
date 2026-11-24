@@ -4,8 +4,7 @@ import asyncio
 import logging
 from datetime import UTC, date, datetime
 
-from langchain_core.messages import AIMessage
-
+from navigo_agent.graph.agents.delegation import delegation_args, report
 from navigo_agent.graph.slots import TripSlots
 from navigo_agent.mcp import (
     extract_destination,
@@ -51,14 +50,17 @@ async def weather_agent(state: TravelState) -> dict:
     """Fetch current weather + 5-day forecast for the destination city.
 
     Destination resolution:
-      1. Use the extracted trip slots (destination_city, then destination)
-      2. Fall back to LLM-based extract_destination() which parses the user query
+      1. The extracted trip slots (destination_city, then destination) — the
+         slot extractor resolved them specifically for a weather lookup
+      2. The city the orchestrator named when it delegated
+      3. LLM-based extract_destination() over the user query
 
-    Runs in parallel with the flight/hotel agents, so it returns deltas only
-    and always reports itself completed — on success *and* failure.
+    Runs in parallel with the flight/hotel sub-agents, so it returns deltas
+    only and always reports back — on success *and* failure.
     """
     slots = TripSlots(**(state.get("trip") or {}))
-    city = slots.weather_city or state.get("extracted_destination")
+    delegated_city = str(delegation_args(state).get("city") or "").strip()
+    city = slots.weather_city or delegated_city or state.get("extracted_destination")
     llm_calls = 0
 
     try:
@@ -83,19 +85,10 @@ Forecast:
         if isinstance(e, TimeoutError):
             e = TimeoutError(f"no response within {WEATHER_TIMEOUT_SECONDS}s")
         logger.error("Weather agent failed: %s", e)
-        weather_text = f"Weather information unavailable: {e!s}"
-        # Error path: still mark completed and save the extracted destination for reuse
-        return {
-            "weather_results": weather_text,
-            "messages": [AIMessage(content="Weather check encountered an error.")],
-            "llm_calls": llm_calls,
-            "errors": [f"weather_agent: {e!s}"],
-            "completed_agents": ["weather_agent"],
-        }
+        # Error path: still report back, so the orchestrator carries on without the data.
+        return report(
+            state, "weather_agent", f"Weather information unavailable: {e!s}",
+            llm_calls=llm_calls, errors=[f"weather_agent: {e!s}"],
+        )
 
-    return {
-        "weather_results": weather_text,
-        "messages": [AIMessage(content="Weather information fetched.")],
-        "llm_calls": llm_calls,
-        "completed_agents": ["weather_agent"],
-    }
+    return report(state, "weather_agent", weather_text, llm_calls=llm_calls)

@@ -120,7 +120,7 @@ class TestAnswerStreamer:
         assert streaming._chunk_text(None) == ""
 
 
-def _token(text, node="final_synthesizer"):
+def _token(text, node="orchestrator"):
     return {"event": "on_chat_model_stream", "name": "ChatGroq",
             "metadata": {"langgraph_node": node}, "data": {"chunk": AIMessage(content=text)}}
 
@@ -128,13 +128,14 @@ def _token(text, node="final_synthesizer"):
 @pytest.mark.asyncio
 async def test_stream_emits_answer_deltas_only_for_the_final_answer():
     events = [
-        _token("internal reasoning\n", node="supervisor"),          # other nodes' tokens stay private
+        _token("slot extraction\n", node="intent_classifier"),     # other nodes' tokens stay private
         _token("search notes\n", node="flight_agent"),
-        {"event": "on_chain_start", "name": "final_synthesizer", "data": {}},
+        {"event": "on_chain_start", "name": "orchestrator", "data": {}},
         _token("## Plan\n"),
         _token("Day 1: To"),
         _token("kyo\nDay 2: Kyoto"),
-        {"event": "on_chain_end", "name": "final_synthesizer", "data": {"output": {}}},
+        {"event": "on_chain_end", "name": "orchestrator",
+         "data": {"output": {"messages": [AIMessage(content="## Plan\nDay 1: Tokyo\nDay 2: Kyoto")]}}},
         {"event": "on_chain_end", "name": "LangGraph", "data": {"output": {
             "messages": [AIMessage(content="## Plan\nDay 1: Tokyo\nDay 2: Kyoto")],
         }}},
@@ -147,3 +148,78 @@ async def test_stream_emits_answer_deltas_only_for_the_final_answer():
     # The tail is flushed before the node is reported complete
     order = [(e, d.get("status")) for e, d in parsed if e in {"answer_delta", "progress"}]
     assert order[-2:] == [("answer_delta", None), ("progress", "completed")]
+
+
+def _llm_start(node="orchestrator"):
+    return {"event": "on_chat_model_start", "name": "ChatGroq", "metadata": {"langgraph_node": node}, "data": {}}
+
+
+def _delegation(*names):
+    calls = [{"name": n, "args": {}, "id": f"call_{n}", "type": "tool_call"} for n in names]
+    return {"messages": [AIMessage(content="", tool_calls=calls)]}
+
+
+@pytest.mark.asyncio
+async def test_text_before_a_delegation_is_not_the_answer():
+    """Only the orchestrator's last turn is the answer; earlier text is retracted or never sent."""
+    events = [
+        # Turn 1: one finished line and an unfinished one, then the turn ends in tool calls
+        {"event": "on_chain_start", "name": "orchestrator", "data": {}},
+        _llm_start(),
+        _token("Let me look that up.\n"),
+        _token("Checking the wea"),
+        {"event": "on_chain_end", "name": "orchestrator", "data": {"output": _delegation("weather_agent")}},
+        {"event": "on_chain_start", "name": "weather_agent", "data": {}},
+        _llm_start(node="weather_agent"),                             # a sub-agent's LLM call resets nothing
+        {"event": "on_chain_end", "name": "weather_agent", "data": {"output": {"weather_results": "sunny"}}},
+        # Turn 2: the answer
+        {"event": "on_chain_start", "name": "orchestrator", "data": {}},
+        _llm_start(),
+        _token("Sunny all week.\n"),
+        _token("Pack light."),
+        {"event": "on_chain_end", "name": "orchestrator",
+         "data": {"output": {"messages": [AIMessage(content="Sunny all week.\nPack light.")]}}},
+        {"event": "on_chain_end", "name": "LangGraph", "data": {"output": {
+            "messages": [AIMessage(content="Sunny all week.\nPack light.")], "weather_results": "sunny",
+        }}},
+    ]
+    parsed = await _collect(events)
+    stream = [(e, d.get("text")) for e, d in parsed if e in {"answer_delta", "answer_reset"}]
+    assert stream == [
+        ("answer_delta", "Let me look that up.\n"),
+        ("answer_reset", None),                # ...and the unfinished line is dropped silently
+        ("answer_delta", "Sunny all week.\n"),
+        ("answer_delta", "Pack light."),
+    ]
+    assert dict(parsed)["agent_result"] == {"weather_results": "sunny"}
+    assert parsed[-1][0] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_a_second_llm_call_in_one_turn_replaces_the_first():
+    """A failed decision call followed by the tool-free answer call: only the latter counts."""
+    events = [
+        {"event": "on_chain_start", "name": "orchestrator", "data": {}},
+        _llm_start(),
+        _token("Half an ans\n"),
+        _llm_start(),
+        _token("The real answer."),
+        {"event": "on_chain_end", "name": "orchestrator",
+         "data": {"output": {"messages": [AIMessage(content="The real answer.")]}}},
+        {"event": "on_chain_end", "name": "LangGraph",
+         "data": {"output": {"messages": [AIMessage(content="The real answer.")]}}},
+    ]
+    parsed = await _collect(events)
+    stream = [(e, d.get("text")) for e, d in parsed if e in {"answer_delta", "answer_reset"}]
+    assert stream == [("answer_delta", "Half an ans\n"), ("answer_reset", None), ("answer_delta", "The real answer.")]
+
+
+@pytest.mark.asyncio
+async def test_no_reset_when_nothing_was_streamed():
+    events = [
+        {"event": "on_chain_start", "name": "orchestrator", "data": {}},
+        _llm_start(),
+        {"event": "on_chain_end", "name": "orchestrator", "data": {"output": _delegation("flight_agent")}},
+        {"event": "on_chain_end", "name": "LangGraph", "data": {"output": {"messages": [AIMessage(content="x")]}}},
+    ]
+    assert "answer_reset" not in [e for e, _ in await _collect(events)]

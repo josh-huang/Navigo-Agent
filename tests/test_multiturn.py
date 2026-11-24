@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 import navigo_agent
-import navigo_agent.graph.routing as routing_mod
+import navigo_agent.graph.intake as intake_mod
 import navigo_agent.graph.slots as slots_mod
 from navigo_agent import streaming
 from navigo_agent.graph.slots import (
@@ -98,8 +98,8 @@ class TestIntentClassifierFollowUp:
     async def test_follow_up_merges_slots_and_prefers_llm_intent(self):
         # Regex alone would say "hotel"; with context the LLM asks for a full re-plan.
         follow = AsyncMock(return_value=("full_trip", TripSlots(budget="budget"), True))
-        with patch.object(routing_mod, "extract_follow_up", follow):
-            update = await routing_mod.intent_classifier(self._state("make it cheaper with budget hotels"))
+        with patch.object(intake_mod, "extract_follow_up", follow):
+            update = await intake_mod.intent_classifier(self._state("make it cheaper with budget hotels"))
         assert update["user_intent"] == "full_trip"
         assert update["trip"]["destination"] == "Tokyo"   # carried over
         assert update["trip"]["origin"] == "Dhaka"
@@ -111,8 +111,8 @@ class TestIntentClassifierFollowUp:
     @pytest.mark.asyncio
     async def test_new_topic_drops_history_and_previous_slots(self):
         follow = AsyncMock(return_value=("full_trip", TripSlots(destination="Dubai"), False))
-        with patch.object(routing_mod, "extract_follow_up", follow):
-            update = await routing_mod.intent_classifier(self._state("Plan a trip to Dubai"))
+        with patch.object(intake_mod, "extract_follow_up", follow):
+            update = await intake_mod.intent_classifier(self._state("Plan a trip to Dubai"))
         assert update["history"] == []
         assert update["trip"]["destination"] == "Dubai"
         assert update["trip"]["origin"] is None           # NOT inherited from Tokyo
@@ -123,10 +123,10 @@ class TestIntentClassifierFollowUp:
         follow = AsyncMock()
         extract = AsyncMock(return_value=("weather", TripSlots(destination="Tokyo")))
         with (
-            patch.object(routing_mod, "extract_follow_up", follow),
-            patch.object(routing_mod, "extract_trip_request", extract),
+            patch.object(intake_mod, "extract_follow_up", follow),
+            patch.object(intake_mod, "extract_trip_request", extract),
         ):
-            update = await routing_mod.intent_classifier(build_initial_state("Weather in Tokyo?"))
+            update = await intake_mod.intent_classifier(build_initial_state("Weather in Tokyo?"))
         follow.assert_not_awaited()
         assert update["history"] == []
 
@@ -199,17 +199,19 @@ class TestConversationEndToEnd:
         assert history == [{"user": "Plan a 5-day trip to Tokyo from Dhaka", "assistant": "FINAL PLAN"}]
         assert previous_trip["destination"] == "Tokyo"
 
-        # Agents, supervisor and the final synthesizer all got the conversation
+        # The sub-agents and the orchestrator (on every turn of its loop) got the conversation
         flight_first, flight_second = graph_env["agent_messages"]["flight_agent"]
         assert "Conversation So Far" not in flight_first
         assert "Conversation So Far" in flight_second
         assert "Plan a 5-day trip to Tokyo from Dhaka" in flight_second
-        assert "Conversation So Far" in graph_env["supervisor_prompts"][-1]
-        final_prompt = graph_env["final_prompts"][-1]
-        assert "This is a follow-up" in final_prompt
-        assert "- Budget: budget" in final_prompt
-        assert "- Destination: Tokyo" in final_prompt
-        assert "This is a follow-up" not in graph_env["final_prompts"][0]
+        first_run, second_run = graph_env["orchestrator_prompts"][:3], graph_env["orchestrator_prompts"][3:]
+        assert len(second_run) == 3  # research → itinerary → answer
+        assert all("This is a follow-up" in brief for brief in second_run)
+        assert not any("This is a follow-up" in brief for brief in first_run)
+        answer_prompt = graph_env["answer_prompts"][-1]
+        assert "Conversation So Far" in answer_prompt
+        assert "- Budget: budget" in answer_prompt
+        assert "- Destination: Tokyo" in answer_prompt
 
     @pytest.mark.asyncio
     async def test_history_accumulates_across_turns(self, graph_env):
@@ -233,8 +235,8 @@ class TestConversationEndToEnd:
 
         assert second["follow_up"] is False
         graph_env["weather"].assert_awaited_with("Paris")
-        assert "Conversation So Far" not in graph_env["final_prompts"][-1]
-        assert "Dhaka" not in graph_env["final_prompts"][-1]
+        assert "Conversation So Far" not in graph_env["answer_prompts"][-1]
+        assert "Dhaka" not in graph_env["answer_prompts"][-1]
 
     @pytest.mark.asyncio
     async def test_clarification_reply_is_not_treated_as_follow_up(self, graph_env):

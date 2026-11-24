@@ -1,4 +1,4 @@
-"""Curated evaluation test cases for the Navigo-Agent supervisor system.
+"""Curated evaluation test cases for the Navigo-Agent orchestrator system.
 
 Each case defines: query, expected_intent and expected_agents (the agents
 that SHOULD run; None → not asserted). A case may also carry a `follow_up`
@@ -63,7 +63,7 @@ EVALUATION_CASES = [
         "category": "general",
         "query": "Tell me about Tokyo",
         "expected_intent": "general",
-        "expected_agents": None,  # supervisor should decide — no strict assertion
+        "expected_agents": None,  # the orchestrator decides — no strict assertion
     },
     {
         "id": "ambiguous_001",

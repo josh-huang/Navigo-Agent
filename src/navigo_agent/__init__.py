@@ -1,7 +1,7 @@
 """Navigo-Agent: AI-powered multi-agent travel planner.
 
-Built on LangGraph with supervisor routing, MCP tool integration,
-and production-grade guardrails.
+Built on LangGraph: a main orchestrator agent delegates to specialist
+sub-agents, with MCP tool integration and production-grade guardrails.
 
 Usage:
     from navigo_agent import run_travel_agent
@@ -43,8 +43,8 @@ async def run_travel_agent(
         allow_clarification: False → never pause to ask the user (batch/eval).
 
     Returns:
-        dict with keys: thread_id, answer, intent, agents (the agents that
-                        ran), errors, flight_results, hotel_results,
+        dict with keys: thread_id, answer, intent, agents (the sub-agents the
+                        orchestrator delegated to), errors, flight_results, hotel_results,
                         weather_results, itinerary, llm_calls,
                         needs_clarification, follow_up, question, missing.
         When needs_clarification is True, `answer` is the question and the

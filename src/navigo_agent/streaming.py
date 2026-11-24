@@ -1,4 +1,4 @@
-"""SSE streaming for the Navigo-Agent supervisor graph.
+"""SSE streaming for the Navigo-Agent orchestrator graph.
 
 Provides a streaming wrapper that yields Server-Sent Events as each agent
 node completes. Frontend renders these as real-time progress indicators.
@@ -19,6 +19,7 @@ import logging
 import time
 from collections.abc import AsyncGenerator
 
+from navigo_agent.graph.agents.delegation import SUBAGENTS
 from navigo_agent.graph.builder import get_compiled_graph
 from navigo_agent.guardrails import guard_output
 from navigo_agent.session import log_run_summary, pending_clarification, plan_run
@@ -28,26 +29,25 @@ logger = logging.getLogger(__name__)
 # Agent display names for frontend progress indicators
 AGENT_DISPLAY_NAMES = {
     "intent_classifier": "Analysing your request",
-    "supervisor": "Planning next steps",
+    "orchestrator": "Orchestrating your trip",
     "flight_agent": "Searching flights",
     "hotel_agent": "Finding hotels",
     "weather_agent": "Checking weather",
     "itinerary_agent": "Building itinerary",
-    "final_synthesizer": "Finalising your plan",
 }
 
 AGENT_ICONS = {
     "intent_classifier": "🤔",
-    "supervisor": "🧠",
+    "orchestrator": "🧠",
     "flight_agent": "✈️",
     "hotel_agent": "🏨",
     "weather_agent": "🌤️",
     "itinerary_agent": "🗺️",
-    "final_synthesizer": "✨",
 }
 
-
-STREAMED_ANSWER_NODE = "final_synthesizer"
+# The orchestrator writes the final answer, so its tokens are the ones streamed.
+STREAMED_ANSWER_NODE = "orchestrator"
+RESULT_KEY_BY_AGENT = {spec.name: spec.result_key for spec in SUBAGENTS}
 
 
 def _chunk_text(chunk) -> str:
@@ -94,6 +94,12 @@ class AnswerStreamer:
         return guard_output(text)
 
 
+def _is_delegating(output) -> bool:
+    """True when an orchestrator turn ended in tool calls rather than an answer."""
+    messages = output.get("messages") if isinstance(output, dict) else None
+    return bool(messages and getattr(messages[-1], "tool_calls", None))
+
+
 def _sse_event(event: str, data: dict) -> str:
     """Format a single SSE event."""
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
@@ -109,6 +115,8 @@ async def stream_travel_plan(
       - `progress`: an agent node has started or completed (`status`: started | completed)
       - `agent_result`: an agent has finished (includes partial results)
       - `answer_delta`: the next line(s) of the final answer, as it is being written
+      - `answer_reset`: discard the `answer_delta` text received so far — the
+        orchestrator went on to delegate instead of answering
       - `complete`: the entire graph run completed
       - `clarification`: the run paused to ask the user a question;
         send the reply with the returned thread_id to continue
@@ -140,9 +148,20 @@ async def stream_travel_plan(
             kind = event.get("event", "")
             name = event.get("name", "")
 
+            in_answer_node = event.get("metadata", {}).get("langgraph_node") == STREAMED_ANSWER_NODE
+
+            # Every orchestrator LLM call is a fresh candidate for the final
+            # answer; only the last one counts. Drop what an earlier call streamed.
+            if kind == "on_chat_model_start":
+                if in_answer_node:
+                    if answer.started:
+                        yield _sse_event("answer_reset", {})
+                    answer = AnswerStreamer()
+                continue
+
             # Final answer tokens → line-buffered, guarded deltas.
             if kind == "on_chat_model_stream":
-                if event.get("metadata", {}).get("langgraph_node") == STREAMED_ANSWER_NODE:
+                if in_answer_node:
                     delta = answer.feed(_chunk_text(event.get("data", {}).get("chunk")))
                     if delta:
                         yield _sse_event("answer_delta", {"text": delta})
@@ -165,10 +184,18 @@ async def stream_travel_plan(
                 display_name = AGENT_DISPLAY_NAMES[name]
                 icon = AGENT_ICONS.get(name, "⏳")
 
+                output = event.get("data", {}).get("output", {})
+
                 if name == STREAMED_ANSWER_NODE:
-                    tail = answer.flush()
-                    if tail:
-                        yield _sse_event("answer_delta", {"text": tail})
+                    if _is_delegating(output):
+                        # The turn ended in delegation — any text was not the answer.
+                        if answer.started:
+                            yield _sse_event("answer_reset", {})
+                        answer = AnswerStreamer()
+                    else:
+                        tail = answer.flush()
+                        if tail:
+                            yield _sse_event("answer_delta", {"text": tail})
 
                 yield _sse_event("progress", {
                     "agent": name,
@@ -177,21 +204,10 @@ async def stream_travel_plan(
                     "status": "completed",
                 })
 
-                # Extract agent-specific results from the output
-                output = event.get("data", {}).get("output", {})
-                if isinstance(output, dict):
-                    result_data = {}
-                    if name == "flight_agent" and output.get("flight_results"):
-                        result_data["flight_results"] = guard_output(output["flight_results"][:500])
-                    elif name == "hotel_agent" and output.get("hotel_results"):
-                        result_data["hotel_results"] = guard_output(output["hotel_results"][:500])
-                    elif name == "weather_agent" and output.get("weather_results"):
-                        result_data["weather_results"] = guard_output(output["weather_results"][:500])
-                    elif name == "itinerary_agent" and output.get("itinerary"):
-                        result_data["itinerary"] = guard_output(output["itinerary"][:500])
-
-                    if result_data:
-                        yield _sse_event("agent_result", result_data)
+                # A sub-agent's report (preview) as soon as it is in
+                result_key = RESULT_KEY_BY_AGENT.get(name)
+                if result_key and isinstance(output, dict) and output.get(result_key):
+                    yield _sse_event("agent_result", {result_key: guard_output(output[result_key][:500])})
 
             # Final graph completion
             if kind == "on_chain_end" and name == "LangGraph":
